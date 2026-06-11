@@ -10,4 +10,5 @@ dependencies = [
     "ipykernel>=7.2.0",
     "numpy",
     "pandas",
+    "pywavelets>=1.9.0",
 ]
