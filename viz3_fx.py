@@ -66,10 +66,9 @@ df_visu = evolution_annuelle.merge(
 # CONSTRUCTION DE LA VISU
 # -----------------------
 
-# 1. On identifie le prénom le plus donné (en triant par la popularité)
+# On identifie le prénom le plus donné (en triant par la popularité)
 prenom_top = prenoms_epicenes_pop.sort_values(by='nombre_total', ascending=False).iloc[0]['preusuel']
 
-# Modification 1 : On initialise la sélection avec ce prénom
 selection = alt.selection_point(
     fields=['preusuel'], 
     empty=False,
@@ -94,10 +93,9 @@ scatter_plot = alt.Chart(prenoms_epicenes_pop).mark_circle(size=60).encode(
     # Modification des couleurs : Corail si sélectionné, Bleu moderne sinon
     color=alt.condition(selection, alt.value('#e76f51'), alt.value('#4ea8de')),
     
-    # Modification de l'opacité : Écart très léger (0.9 vs 0.75)
     opacity=alt.condition(selection, alt.value(0.9), alt.value(0.75))
 ).add_params(
-    selection # On attache le paramètre au graphe
+    selection
 ).properties(
     width=400,
     height=400,
