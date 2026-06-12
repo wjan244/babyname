@@ -19,6 +19,24 @@ df = data[(data["annais"] != "XXXX") & (data["dpt"] != "XX")]
 totaux_annuels = df.groupby(['annais', 'sexe'])['nombre'].sum().reset_index()
 totaux_annuels = totaux_annuels.rename(columns={'nombre': 'total_naissances_sexe'})
 
+# ============================================================
+# MÉTRIQUE GLOBALE 1 : PART DU TOP 1 (par année et par sexe)
+# Pour chaque (année, sexe), quel % des naissances représente
+# le prénom le plus donné cette année-là.
+# Calculé sur TOUS les vrais prénoms (hors agrégats '_').
+# ============================================================
+df_vrais = df[~df['preusuel'].str.startswith('_')]
+# total par (prénom, année, sexe)
+totaux_prenom_an = df_vrais.groupby(['annais', 'sexe', 'preusuel'])['nombre'].sum().reset_index()
+# pour chaque (année, sexe), on garde la ligne du prénom max
+idx_max = totaux_prenom_an.groupby(['annais', 'sexe'])['nombre'].idxmax()
+top1 = totaux_prenom_an.loc[idx_max].copy()
+top1 = top1.merge(totaux_annuels, on=['annais', 'sexe'], how='left')
+top1['part_top1'] = top1['nombre'] / top1['total_naissances_sexe']
+top1 = top1.rename(columns={'preusuel': 'prenom_top1'})
+# table finale : annais, sexe, part_top1, prenom_top1
+top1_metrique = top1[['annais', 'sexe', 'part_top1', 'prenom_top1']]
+
 # PRÉPARATION DES DONNÉES
 # -------------------------
 
@@ -76,6 +94,18 @@ evolution_annuelle['part_miroir'] = np.where(
     evolution_annuelle['part'], 
     -evolution_annuelle['part']
 )
+
+# Ajout de la métrique globale "part du top 1" (même valeur pour tous les prénoms
+# d'un même sexe/année, car c'est une métrique globale).
+evolution_annuelle = evolution_annuelle.merge(
+    top1_metrique[['annais', 'sexe', 'part_top1', 'prenom_top1']], on=['annais', 'sexe'], how='left'
+)
+evolution_annuelle['top1_miroir'] = np.where(
+    evolution_annuelle['sexe'].isin([1]),
+    evolution_annuelle['part_top1'],
+    -evolution_annuelle['part_top1']
+)
+
 evolution_annuelle['sexe'] = evolution_annuelle['sexe'].astype(str).replace({'1': 'Homme', '2': 'Femme'})
 prenoms_epicenes_pop = prenoms_epicenes_pop.rename(columns={'nombre': 'nombre_total'})
 
@@ -85,6 +115,24 @@ df_visu = evolution_annuelle.merge(
     on='preusuel', 
     how='inner'
 )
+
+# FORMAT LONG : on empile les métriques (part_miroir, top1_miroir) dans une
+# seule colonne 'valeur', avec une colonne 'metrique' pour les distinguer.
+# C'est cette colonne que le dropdown filtrera (méthode fiable).
+df_long = df_visu.melt(
+    id_vars=['preusuel', 'annais', 'sexe', 'part', 'nombre', 'nombre_total',
+             'correlation_H_F', 'prenom_top1'],
+    value_vars=['part_miroir', 'top1_miroir'],
+    var_name='metrique',
+    value_name='valeur'
+)
+# noms lisibles pour le dropdown
+df_long['metrique'] = df_long['metrique'].replace({
+    'part_miroir': 'Part H/F du prénom',
+    'top1_miroir': 'Part du top 1 (global)'
+})
+# valeur absolue pour le tooltip (la courbe est en miroir, donc négative pour F)
+df_long['valeur_abs'] = df_long['valeur'].abs()
 
 # CONSTRUCTION DE LA VISU
 # -----------------------
@@ -142,10 +190,21 @@ ligne_zero = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(
 scatter_plot = ligne_zero + scatter_plot
 
 # Graphique de droite (Courbes en miroir)
-courbes = alt.Chart(df_visu).mark_area(opacity=0.7).encode(
+# Dropdown : sélectionne la métrique, on filtre la table longue dessus
+metrique_dropdown = alt.binding_select(
+    options=['Part H/F du prénom', 'Part du top 1 (global)'],
+    name='Métrique : '
+)
+param_metrique = alt.selection_point(
+    fields=['metrique'],
+    bind=metrique_dropdown,
+    value='Part H/F du prénom'
+)
+
+courbes = alt.Chart(df_long).mark_area(opacity=0.7).encode(
     x=alt.X('annais:Q', title='Année de naissance', axis=alt.Axis(format='d')), 
-    y=alt.Y('part_miroir:Q', 
-            title='Part des naissances du sexe (H en +, F en -)',
+    y=alt.Y('valeur:Q', 
+            title='Valeur selon la métrique (H en +, F en -)',
             axis=alt.Axis(format='.1%')),
     
     color=alt.Color('sexe:N', 
@@ -159,14 +218,17 @@ courbes = alt.Chart(df_visu).mark_area(opacity=0.7).encode(
     detail='preusuel:N',
     
     tooltip=[
-        alt.Tooltip('preusuel:N', title='Prénom'),
-        alt.Tooltip('annais:Q', title='Année'),
-        alt.Tooltip('sexe:N', title='Sexe'), 
-        alt.Tooltip('part:Q', title='Part du sexe', format='.2%'),
-        alt.Tooltip('nombre:Q', title='Nombre réel') 
+        alt.Tooltip('annais:Q', title='Année', format='d'),
+        alt.Tooltip('sexe:N', title='Sexe'),
+        alt.Tooltip('valeur_abs:Q', title='Valeur', format='.2%'),
+        alt.Tooltip('prenom_top1:N', title='N°1 de l\'année')
     ]
 ).transform_filter(
     selection
+).transform_filter(
+    param_metrique
+).add_params(
+    param_metrique
 ).properties(
     width=450,
     height=400
