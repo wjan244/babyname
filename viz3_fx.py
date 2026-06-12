@@ -37,6 +37,22 @@ top1 = top1.rename(columns={'preusuel': 'prenom_top1'})
 # table finale : annais, sexe, part_top1, prenom_top1
 top1_metrique = top1[['annais', 'sexe', 'part_top1', 'prenom_top1']]
 
+# ============================================================
+# MÉTRIQUE GLOBALE 2 : DURÉE DU RÈGNE DU TOP 1
+# Pour chaque année, depuis combien d'années consécutives le n°1
+# est-il le même. Toute la séquence affiche la durée TOTALE du règne
+# (ex : Jean n°1 de 1900 à 1957 -> ces 58 années affichent 58).
+# ============================================================
+resultats_duree = []
+for sexe_val in [1, 2]:
+    g = top1_metrique[top1_metrique['sexe'] == sexe_val].sort_values('annais').copy()
+    # un nouveau "bloc" commence à chaque changement de prénom n°1
+    bloc = (g['prenom_top1'] != g['prenom_top1'].shift()).cumsum()
+    # durée du règne = taille du bloc
+    g['duree_top1'] = g.groupby(bloc)['prenom_top1'].transform('size')
+    resultats_duree.append(g[['annais', 'sexe', 'duree_top1', 'prenom_top1']])
+duree_metrique = pd.concat(resultats_duree)
+
 # PRÉPARATION DES DONNÉES
 # -------------------------
 
@@ -121,6 +137,19 @@ df_top1['valeur'] = df_top1['top1_miroir']
 df_top1['valeur_abs'] = df_top1['valeur'].abs()
 df_top1['titre_affiche'] = 'Poids du prénom n°1 (par année)'
 
+# ====== COUCHE 3 : durée du règne du top 1 (globale, indépendante du prénom) ======
+# Même modèle : une ligne par (année, sexe), pas de colonne prénom filtrable.
+df_duree = duree_metrique.copy()
+df_duree['sexe'] = df_duree['sexe'].astype(str).replace({'1': 'Homme', '2': 'Femme'})
+# en miroir : H vers le haut, F vers le bas (en nombre d'années)
+df_duree['duree_miroir'] = np.where(
+    df_duree['sexe'] == 'Homme', df_duree['duree_top1'], -df_duree['duree_top1']
+)
+df_duree['metrique'] = 'Durée du règne du top 1 (global)'
+df_duree['valeur'] = df_duree['duree_miroir']
+df_duree['valeur_abs'] = df_duree['valeur'].abs()
+df_duree['titre_affiche'] = 'Durée du règne du prénom n°1'
+
 # CONSTRUCTION DE LA VISU
 # -----------------------
 
@@ -135,7 +164,7 @@ selection = alt.selection_point(
 
 # Dropdown métrique (défini ici car référencé par le scatter ET l'aire)
 metrique_dropdown = alt.binding_select(
-    options=['Part H/F du prénom', 'Part du top 1 (global)'],
+    options=['Part H/F du prénom', 'Part du top 1 (global)', 'Durée du règne du top 1 (global)'],
     name='Métrique : '
 )
 param_metrique = alt.selection_point(
@@ -195,8 +224,7 @@ scatter_plot = ligne_zero + scatter_plot
 couche_prenom = alt.Chart(df_prenom).mark_area(opacity=0.7).encode(
     x=alt.X('annais:Q', title='Année de naissance', axis=alt.Axis(format='d')), 
     y=alt.Y('valeur:Q', 
-            title='Valeur selon la métrique (H en +, F en -)',
-            axis=alt.Axis(format='.1%')),
+            title='Valeur (H en +, F en -) — % ou nb d\'années selon la métrique'),
     color=alt.Color('sexe:N', 
                     title='Sexe', 
                     scale=alt.Scale(domain=['Homme', 'Femme'], range=['#2a9d8f', '#e76f51']),
@@ -232,7 +260,26 @@ couche_top1 = alt.Chart(df_top1).mark_area(opacity=0.7).encode(
     param_metrique
 )
 
-courbes = (couche_prenom + couche_top1).properties(
+# Couche 3 : DURÉE du règne du top 1 — globale, axe en nombre d'années (pas en %)
+couche_duree = alt.Chart(df_duree).mark_area(opacity=0.7).encode(
+    x=alt.X('annais:Q', axis=alt.Axis(format='d')), 
+    y=alt.Y('valeur:Q'),
+    color=alt.Color('sexe:N', 
+                    scale=alt.Scale(domain=['Homme', 'Femme'], range=['#2a9d8f', '#e76f51']),
+                    legend=alt.Legend(orient='top')),
+    tooltip=[
+        alt.Tooltip('annais:Q', title='Année', format='d'),
+        alt.Tooltip('sexe:N', title='Sexe'),
+        alt.Tooltip('valeur_abs:Q', title='Durée du règne (ans)', format='d'),
+        alt.Tooltip('prenom_top1:N', title='N°1 de l\'année')
+    ]
+).transform_filter(
+    param_metrique
+)
+
+courbes = alt.layer(
+    couche_prenom, couche_top1, couche_duree
+).properties(
     width=450,
     height=400
 )
@@ -269,7 +316,18 @@ titre_top1 = alt.Chart(df_top1).mark_text(
 ).transform_aggregate(
     groupby=['titre_affiche']
 )
-titre_dynamique = (titre_prenom + titre_top1).properties(
+# Couche titre DURÉE (filtrée par métrique seule) : libellé neutre.
+titre_duree = alt.Chart(df_duree).mark_text(
+    align='center', baseline='middle', fontSize=22, fontWeight='bold',
+    color='#333', x=225, y=20
+).encode(
+    text='titre_affiche:N'
+).transform_filter(
+    param_metrique
+).transform_aggregate(
+    groupby=['titre_affiche']
+)
+titre_dynamique = (titre_prenom + titre_top1 + titre_duree).properties(
     width=450,
     height=40,
     title='2. Évolution temporelle'
