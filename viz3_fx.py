@@ -134,6 +134,14 @@ df_long['metrique'] = df_long['metrique'].replace({
 # valeur absolue pour le tooltip (la courbe est en miroir, donc négative pour F)
 df_long['valeur_abs'] = df_long['valeur'].abs()
 
+# Texte du titre selon la métrique : le prénom en mode par-prénom,
+# un libellé neutre en mode global (sinon le titre "ment" en mode top 1).
+df_long['titre_affiche'] = np.where(
+    df_long['metrique'] == 'Part du top 1 (global)',
+    'Poids du prénom n°1 (par année)',
+    df_long['preusuel']
+)
+
 # CONSTRUCTION DE LA VISU
 # -----------------------
 
@@ -241,21 +249,23 @@ bande_vide = alt.Chart(pd.DataFrame({'x': [0]})).mark_text().encode().properties
 )
 scatter_plot = bande_vide & scatter_plot
 
-# Bande de titre dynamique : sous-titre séparé au-dessus de l'aire
-titre_dynamique = alt.Chart(df_visu).mark_text(
+# Bande de titre dynamique : prénom en mode par-prénom, libellé neutre en mode global
+titre_dynamique = alt.Chart(df_long).mark_text(
     align='center', baseline='middle', fontSize=22, fontWeight='bold',
     color='#333', x=225, y=20
 ).encode(
-    text='preusuel:N'
+    text='titre_affiche:N'
 ).transform_filter(
     selection
+).transform_filter(
+    param_metrique
 ).transform_aggregate(
     # on ne garde qu'une ligne pour ne pas superposer le texte 100 fois
-    groupby=['preusuel']
+    groupby=['titre_affiche']
 ).properties(
     width=450,
     height=40,
-    title='2. Évolution temporelle du prénom sélectionné'
+    title='2. Évolution temporelle'
 )
 
 # Empilement vertical : la bande de titre AU-DESSUS de l'aire
