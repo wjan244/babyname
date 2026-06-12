@@ -1,3 +1,5 @@
+altair-data-*.json
 data/
-*.json
+.venv/
 *.html
+__pycache__/
