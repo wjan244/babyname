@@ -27,9 +27,17 @@ repartition_sexe = df.groupby(['preusuel', 'sexe'])['nombre'].sum().unstack(fill
 repartition_sexe['total'] = repartition_sexe.sum(axis=1)
 repartition_sexe['part_minoritaire'] = repartition_sexe.drop(columns=['total']).min(axis=1) / repartition_sexe['total']
 
+# Part masculine globale du prénom : 0 = entièrement féminin, 1 = entièrement masculin.
+# Colonne 1 = sexe masculin dans le dataset INSEE.
+repartition_sexe['part_masculine'] = repartition_sexe[1] / repartition_sexe['total']
+
 # Règle des 10%, pour filtrer le bruit et les erreurs d'annotation (Marie en H par exemple)
 vrais_epicenes = repartition_sexe[(repartition_sexe['part_minoritaire'] >= 0.10) & (repartition_sexe['total'] >= 500)].index
-df_filtre = df[df['preusuel'].isin(vrais_epicenes)]
+# Exclusion de la catégorie fourre-tout "_PRENOMS_RARES" (et tout préfixe '_'),
+# qui n'est pas un vrai prénom mais un agrégat INSEE des prénoms rares.
+# Elle reste comptée dans totaux_annuels (le dénominateur), mais ne doit pas
+# apparaître comme un "prénom" dans l'analyse.
+df_filtre = df[df['preusuel'].isin(vrais_epicenes) & (~df['preusuel'].str.startswith('_'))]
 evolution_annuelle = df_filtre.groupby(['preusuel', 'sexe', 'annais'])['nombre'].sum().reset_index()
 
 # Passage en PARTS : on divise par le total national du sexe pour cette année.
@@ -56,6 +64,9 @@ correlations = evolution_pivot_filtre.groupby('preusuel').apply(
 prenoms_epicenes = df_filtre.groupby(['preusuel', 'sexe'])['nombre'].sum().reset_index()
 prenoms_epicenes_pop = prenoms_epicenes.groupby(['preusuel'])['nombre'].sum().reset_index()
 prenoms_epicenes_pop = prenoms_epicenes_pop.merge(correlations, on='preusuel', how='left')
+prenoms_epicenes_pop = prenoms_epicenes_pop.merge(
+    repartition_sexe[['part_masculine']], on='preusuel', how='left'
+)
 prenoms_epicenes_pop = prenoms_epicenes_pop.sort_values(by='correlation_H_F', ascending=True)
 
 # PREPA VISU
@@ -88,7 +99,7 @@ selection = alt.selection_point(
 )
 
 # Graphique de gauche (Scatter plot)
-scatter_plot = alt.Chart(prenoms_epicenes_pop).mark_circle(size=60).encode(
+scatter_plot = alt.Chart(prenoms_epicenes_pop).mark_circle(size=80).encode(
     x=alt.X('nombre_total:Q', 
             scale=alt.Scale(type='log'), 
             title='Popularité totale (cumul H+F) - Échelle Log'),
@@ -99,20 +110,36 @@ scatter_plot = alt.Chart(prenoms_epicenes_pop).mark_circle(size=60).encode(
     tooltip=[
         alt.Tooltip('preusuel:N', title='Prénom'),
         alt.Tooltip('nombre_total:Q', title='Popularité totale'),
-        alt.Tooltip('correlation_H_F:Q', title='Corrélation H/F', format='.2f')
+        alt.Tooltip('correlation_H_F:Q', title='Corrélation H/F', format='.2f'),
+        alt.Tooltip('part_masculine:Q', title='Part masculine', format='.0%')
     ],
     
-    # Modification des couleurs : Corail si sélectionné, Bleu moderne sinon
-    color=alt.condition(selection, alt.value('#e76f51'), alt.value('#4ea8de')),
+    # Gradient continu : corail (féminin) -> gris neutre -> vert (masculin)
+    color=alt.Color('part_masculine:Q',
+                    scale=alt.Scale(
+                        domain=[0, 0.5, 1],
+                        range=['#e76f51', '#dddddd', '#2a9d8f']
+                    ),
+                    title='Part masculine'),
     
-    opacity=alt.condition(selection, alt.value(0.9), alt.value(0.75))
+    # La sélection est marquée par un contour noir épais (pas par la couleur)
+    stroke=alt.condition(selection, alt.value('black'), alt.value(None)),
+    strokeWidth=alt.condition(selection, alt.value(2.5), alt.value(0)),
+    
+    opacity=alt.condition(selection, alt.value(1.0), alt.value(0.8))
 ).add_params(
     selection
 ).properties(
     width=400,
-    height=400,
-    title='1. Cliquez sur un prénom'
+    height=400
 )
+
+# Ligne horizontale à corrélation = 0 (sépare évolution conjointe / basculement)
+ligne_zero = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(
+    color='gray', strokeDash=[4, 4], opacity=0.7
+).encode(y='y:Q')
+
+scatter_plot = ligne_zero + scatter_plot
 
 # Graphique de droite (Courbes en miroir)
 courbes = alt.Chart(df_visu).mark_area(opacity=0.7).encode(
@@ -142,11 +169,43 @@ courbes = alt.Chart(df_visu).mark_area(opacity=0.7).encode(
     selection
 ).properties(
     width=450,
-    height=400,
-    title='2. Évolution temporelle'
+    height=400
 )
 
-tableau_de_bord = scatter_plot | courbes
+# Bande vide au-dessus du scatter, même hauteur que la bande de titre de droite,
+# pour que les deux colonnes commencent leur zone de tracé à la même ligne.
+bande_vide = alt.Chart(pd.DataFrame({'x': [0]})).mark_text().encode().properties(
+    width=400, height=40, title='1. Cliquez sur un prénom'
+)
+scatter_plot = bande_vide & scatter_plot
+
+# Bande de titre dynamique : sous-titre séparé au-dessus de l'aire
+titre_dynamique = alt.Chart(df_visu).mark_text(
+    align='center', baseline='middle', fontSize=22, fontWeight='bold',
+    color='#333', x=225, y=20
+).encode(
+    text='preusuel:N'
+).transform_filter(
+    selection
+).transform_aggregate(
+    # on ne garde qu'une ligne pour ne pas superposer le texte 100 fois
+    groupby=['preusuel']
+).properties(
+    width=450,
+    height=40,
+    title='2. Évolution temporelle du prénom sélectionné'
+)
+
+# Empilement vertical : la bande de titre AU-DESSUS de l'aire
+courbes = titre_dynamique & courbes
+
+# Alignement des deux colonnes par le haut (sinon la colonne de droite,
+# plus haute à cause de la bande de titre, est centrée et décalée)
+tableau_de_bord = alt.hconcat(
+    scatter_plot, courbes, spacing=40, center=False
+).resolve_scale(
+    color='independent'
+)
 file = 'tableau_de_bord_epicenes.html'
 tableau_de_bord.save(file)
 chemin_complet = 'file://' + os.path.realpath(file)
