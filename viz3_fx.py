@@ -12,6 +12,13 @@ data = pd.read_csv('data/dpt2020.csv',sep=";")
 
 df = data[(data["annais"] != "XXXX") & (data["dpt"] != "XX")]
 
+# TOTAUX ANNUELS NATIONAUX PAR SEXE (le dénominateur)
+# -------------------------
+# Calculé sur TOUT le dataset (tous prénoms), sinon le dénominateur serait faux.
+# Donne, pour chaque (année, sexe), le nombre total de naissances en France.
+totaux_annuels = df.groupby(['annais', 'sexe'])['nombre'].sum().reset_index()
+totaux_annuels = totaux_annuels.rename(columns={'nombre': 'total_naissances_sexe'})
+
 # PRÉPARATION DES DONNÉES
 # -------------------------
 
@@ -25,10 +32,15 @@ vrais_epicenes = repartition_sexe[(repartition_sexe['part_minoritaire'] >= 0.10)
 df_filtre = df[df['preusuel'].isin(vrais_epicenes)]
 evolution_annuelle = df_filtre.groupby(['preusuel', 'sexe', 'annais'])['nombre'].sum().reset_index()
 
+# Passage en PARTS : on divise par le total national du sexe pour cette année.
+# Neutralise la démographie (plus de naissances en 2000 qu'en 1900).
+evolution_annuelle = evolution_annuelle.merge(totaux_annuels, on=['annais', 'sexe'], how='left')
+evolution_annuelle['part'] = evolution_annuelle['nombre'] / evolution_annuelle['total_naissances_sexe']
+
 evolution_pivot = evolution_annuelle.pivot_table(
     index=['preusuel', 'annais'], 
     columns='sexe', 
-    values='nombre', 
+    values='part', 
     fill_value=0
 )
 
@@ -48,10 +60,10 @@ prenoms_epicenes_pop = prenoms_epicenes_pop.sort_values(by='correlation_H_F', as
 
 # PREPA VISU
 # ----
-evolution_annuelle['nombre_miroir'] = np.where(
+evolution_annuelle['part_miroir'] = np.where(
     evolution_annuelle['sexe'].isin([1]), 
-    evolution_annuelle['nombre'], 
-    -evolution_annuelle['nombre']
+    evolution_annuelle['part'], 
+    -evolution_annuelle['part']
 )
 evolution_annuelle['sexe'] = evolution_annuelle['sexe'].astype(str).replace({'1': 'Homme', '2': 'Femme'})
 prenoms_epicenes_pop = prenoms_epicenes_pop.rename(columns={'nombre': 'nombre_total'})
@@ -105,7 +117,9 @@ scatter_plot = alt.Chart(prenoms_epicenes_pop).mark_circle(size=60).encode(
 # Graphique de droite (Courbes en miroir)
 courbes = alt.Chart(df_visu).mark_area(opacity=0.7).encode(
     x=alt.X('annais:Q', title='Année de naissance', axis=alt.Axis(format='d')), 
-    y=alt.Y('nombre_miroir:Q', title='Attributions (H en +, F en -)'),
+    y=alt.Y('part_miroir:Q', 
+            title='Part des naissances du sexe (H en +, F en -)',
+            axis=alt.Axis(format='.1%')),
     
     color=alt.Color('sexe:N', 
                     title='Sexe', 
@@ -121,7 +135,8 @@ courbes = alt.Chart(df_visu).mark_area(opacity=0.7).encode(
         alt.Tooltip('preusuel:N', title='Prénom'),
         alt.Tooltip('annais:Q', title='Année'),
         alt.Tooltip('sexe:N', title='Sexe'), 
-        alt.Tooltip('nombre:Q', title='Nombre réel (positif)') 
+        alt.Tooltip('part:Q', title='Part du sexe', format='.2%'),
+        alt.Tooltip('nombre:Q', title='Nombre réel') 
     ]
 ).transform_filter(
     selection
