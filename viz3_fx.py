@@ -154,6 +154,17 @@ selection = alt.selection_point(
     value=[{'preusuel': prenom_top}] # Sélection par défaut
 )
 
+# Dropdown métrique (défini ici car référencé par le scatter ET l'aire)
+metrique_dropdown = alt.binding_select(
+    options=['Part H/F du prénom', 'Part du top 1 (global)'],
+    name='Métrique : '
+)
+param_metrique = alt.selection_point(
+    fields=['metrique'],
+    bind=metrique_dropdown,
+    value='Part H/F du prénom'
+)
+
 # Graphique de gauche (Scatter plot)
 scatter_plot = alt.Chart(prenoms_epicenes_pop).mark_circle(size=80).encode(
     x=alt.X('nombre_total:Q', 
@@ -184,7 +195,8 @@ scatter_plot = alt.Chart(prenoms_epicenes_pop).mark_circle(size=80).encode(
     
     opacity=alt.condition(selection, alt.value(1.0), alt.value(0.8))
 ).add_params(
-    selection
+    selection,
+    param_metrique
 ).properties(
     width=400,
     height=400
@@ -198,17 +210,7 @@ ligne_zero = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(
 scatter_plot = ligne_zero + scatter_plot
 
 # Graphique de droite (Courbes en miroir)
-# Dropdown : sélectionne la métrique, on filtre la table longue dessus
-metrique_dropdown = alt.binding_select(
-    options=['Part H/F du prénom', 'Part du top 1 (global)'],
-    name='Métrique : '
-)
-param_metrique = alt.selection_point(
-    fields=['metrique'],
-    bind=metrique_dropdown,
-    value='Part H/F du prénom'
-)
-
+# Le dropdown param_metrique est défini plus haut (avant le scatter).
 courbes = alt.Chart(df_long).mark_area(opacity=0.7).encode(
     x=alt.X('annais:Q', title='Année de naissance', axis=alt.Axis(format='d')), 
     y=alt.Y('valeur:Q', 
@@ -234,8 +236,6 @@ courbes = alt.Chart(df_long).mark_area(opacity=0.7).encode(
 ).transform_filter(
     selection
 ).transform_filter(
-    param_metrique
-).add_params(
     param_metrique
 ).properties(
     width=450,
