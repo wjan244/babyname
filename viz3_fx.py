@@ -95,52 +95,31 @@ evolution_annuelle['part_miroir'] = np.where(
     -evolution_annuelle['part']
 )
 
-# Ajout de la métrique globale "part du top 1" (même valeur pour tous les prénoms
-# d'un même sexe/année, car c'est une métrique globale).
-evolution_annuelle = evolution_annuelle.merge(
-    top1_metrique[['annais', 'sexe', 'part_top1', 'prenom_top1']], on=['annais', 'sexe'], how='left'
-)
-evolution_annuelle['top1_miroir'] = np.where(
-    evolution_annuelle['sexe'].isin([1]),
-    evolution_annuelle['part_top1'],
-    -evolution_annuelle['part_top1']
-)
-
 evolution_annuelle['sexe'] = evolution_annuelle['sexe'].astype(str).replace({'1': 'Homme', '2': 'Femme'})
 prenoms_epicenes_pop = prenoms_epicenes_pop.rename(columns={'nombre': 'nombre_total'})
 
-# On fusionne pour que toutes les infos soient dans la même table
-df_visu = evolution_annuelle.merge(
+# ====== COUCHE 1 : données PAR PRÉNOM (filtrées par le clic) ======
+df_prenom = evolution_annuelle.merge(
     prenoms_epicenes_pop[['preusuel', 'nombre_total', 'correlation_H_F']], 
     on='preusuel', 
     how='inner'
 )
+df_prenom['metrique'] = 'Part H/F du prénom'
+df_prenom['valeur'] = df_prenom['part_miroir']
+df_prenom['valeur_abs'] = df_prenom['valeur'].abs()
+df_prenom['titre_affiche'] = df_prenom['preusuel']
 
-# FORMAT LONG : on empile les métriques (part_miroir, top1_miroir) dans une
-# seule colonne 'valeur', avec une colonne 'metrique' pour les distinguer.
-# C'est cette colonne que le dropdown filtrera (méthode fiable).
-df_long = df_visu.melt(
-    id_vars=['preusuel', 'annais', 'sexe', 'part', 'nombre', 'nombre_total',
-             'correlation_H_F', 'prenom_top1'],
-    value_vars=['part_miroir', 'top1_miroir'],
-    var_name='metrique',
-    value_name='valeur'
+# ====== COUCHE 2 : données GLOBALES top 1 (indépendantes du prénom) ======
+# Une ligne par (année, sexe). PAS de colonne prénom -> le clic ne peut pas la filtrer.
+df_top1 = top1_metrique.copy()
+df_top1['sexe'] = df_top1['sexe'].astype(str).replace({'1': 'Homme', '2': 'Femme'})
+df_top1['top1_miroir'] = np.where(
+    df_top1['sexe'] == 'Homme', df_top1['part_top1'], -df_top1['part_top1']
 )
-# noms lisibles pour le dropdown
-df_long['metrique'] = df_long['metrique'].replace({
-    'part_miroir': 'Part H/F du prénom',
-    'top1_miroir': 'Part du top 1 (global)'
-})
-# valeur absolue pour le tooltip (la courbe est en miroir, donc négative pour F)
-df_long['valeur_abs'] = df_long['valeur'].abs()
-
-# Texte du titre selon la métrique : le prénom en mode par-prénom,
-# un libellé neutre en mode global (sinon le titre "ment" en mode top 1).
-df_long['titre_affiche'] = np.where(
-    df_long['metrique'] == 'Part du top 1 (global)',
-    'Poids du prénom n°1 (par année)',
-    df_long['preusuel']
-)
+df_top1['metrique'] = 'Part du top 1 (global)'
+df_top1['valeur'] = df_top1['top1_miroir']
+df_top1['valeur_abs'] = df_top1['valeur'].abs()
+df_top1['titre_affiche'] = 'Poids du prénom n°1 (par année)'
 
 # CONSTRUCTION DE LA VISU
 # -----------------------
@@ -209,35 +188,51 @@ ligne_zero = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(
 
 scatter_plot = ligne_zero + scatter_plot
 
-# Graphique de droite (Courbes en miroir)
+# Graphique de droite : DEUX couches superposées, le dropdown affiche l'une OU l'autre.
 # Le dropdown param_metrique est défini plus haut (avant le scatter).
-courbes = alt.Chart(df_long).mark_area(opacity=0.7).encode(
+
+# Couche 1 : PAR PRÉNOM — filtrée par le clic ET par la métrique
+couche_prenom = alt.Chart(df_prenom).mark_area(opacity=0.7).encode(
     x=alt.X('annais:Q', title='Année de naissance', axis=alt.Axis(format='d')), 
     y=alt.Y('valeur:Q', 
             title='Valeur selon la métrique (H en +, F en -)',
             axis=alt.Axis(format='.1%')),
-    
     color=alt.Color('sexe:N', 
                     title='Sexe', 
-                    scale=alt.Scale(
-                        domain=['Homme', 'Femme'], 
-                        range=['#2a9d8f', '#e76f51']
-                    ),
+                    scale=alt.Scale(domain=['Homme', 'Femme'], range=['#2a9d8f', '#e76f51']),
                     legend=alt.Legend(orient='top')),
-    
     detail='preusuel:N',
-    
     tooltip=[
+        alt.Tooltip('preusuel:N', title='Prénom'),
         alt.Tooltip('annais:Q', title='Année', format='d'),
         alt.Tooltip('sexe:N', title='Sexe'),
-        alt.Tooltip('valeur_abs:Q', title='Valeur', format='.2%'),
-        alt.Tooltip('prenom_top1:N', title='N°1 de l\'année')
+        alt.Tooltip('valeur_abs:Q', title='Part du sexe', format='.2%')
     ]
 ).transform_filter(
     selection
 ).transform_filter(
     param_metrique
-).properties(
+)
+
+# Couche 2 : GLOBALE top 1 — filtrée SEULEMENT par la métrique (jamais par le clic).
+# Pas de colonne prénom : le clic ne peut pas la tronquer.
+couche_top1 = alt.Chart(df_top1).mark_area(opacity=0.7).encode(
+    x=alt.X('annais:Q', axis=alt.Axis(format='d')), 
+    y=alt.Y('valeur:Q'),
+    color=alt.Color('sexe:N', 
+                    scale=alt.Scale(domain=['Homme', 'Femme'], range=['#2a9d8f', '#e76f51']),
+                    legend=alt.Legend(orient='top')),
+    tooltip=[
+        alt.Tooltip('annais:Q', title='Année', format='d'),
+        alt.Tooltip('sexe:N', title='Sexe'),
+        alt.Tooltip('valeur_abs:Q', title='Part du top 1', format='.2%'),
+        alt.Tooltip('prenom_top1:N', title='N°1 de l\'année')
+    ]
+).transform_filter(
+    param_metrique
+)
+
+courbes = (couche_prenom + couche_top1).properties(
     width=450,
     height=400
 )
@@ -249,8 +244,9 @@ bande_vide = alt.Chart(pd.DataFrame({'x': [0]})).mark_text().encode().properties
 )
 scatter_plot = bande_vide & scatter_plot
 
-# Bande de titre dynamique : prénom en mode par-prénom, libellé neutre en mode global
-titre_dynamique = alt.Chart(df_long).mark_text(
+# Bande de titre dynamique : deux couches, une par métrique.
+# Couche titre PAR PRÉNOM (filtrée par le clic + métrique) : affiche le prénom.
+titre_prenom = alt.Chart(df_prenom).mark_text(
     align='center', baseline='middle', fontSize=22, fontWeight='bold',
     color='#333', x=225, y=20
 ).encode(
@@ -260,9 +256,20 @@ titre_dynamique = alt.Chart(df_long).mark_text(
 ).transform_filter(
     param_metrique
 ).transform_aggregate(
-    # on ne garde qu'une ligne pour ne pas superposer le texte 100 fois
     groupby=['titre_affiche']
-).properties(
+)
+# Couche titre GLOBALE (filtrée par métrique seule) : libellé neutre.
+titre_top1 = alt.Chart(df_top1).mark_text(
+    align='center', baseline='middle', fontSize=22, fontWeight='bold',
+    color='#333', x=225, y=20
+).encode(
+    text='titre_affiche:N'
+).transform_filter(
+    param_metrique
+).transform_aggregate(
+    groupby=['titre_affiche']
+)
+titre_dynamique = (titre_prenom + titre_top1).properties(
     width=450,
     height=40,
     title='2. Évolution temporelle'
