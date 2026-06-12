@@ -53,6 +53,47 @@ for sexe_val in [1, 2]:
     resultats_duree.append(g[['annais', 'sexe', 'duree_top1', 'prenom_top1']])
 duree_metrique = pd.concat(resultats_duree)
 
+# ============================================================
+# MÉTRIQUE GLOBALE 3 : INDICE DE RÉGIONALITÉ (écart-type entre régions)
+# Pour chaque (année, sexe) : on prend le top 100 prénoms de l'année,
+# on calcule pour chacun la part qu'il représente dans chaque région,
+# puis l'écart-type de ces parts entre régions, et la moyenne sur les prénoms.
+# Plus l'indice est élevé, plus les prénoms sont inégalement répartis
+# géographiquement (= forte régionalité).
+# ============================================================
+DPT_REGION = {
+    '01':'ARA','03':'ARA','07':'ARA','15':'ARA','26':'ARA','38':'ARA','42':'ARA','43':'ARA','63':'ARA','69':'ARA','73':'ARA','74':'ARA',
+    '21':'BFC','25':'BFC','39':'BFC','58':'BFC','70':'BFC','71':'BFC','89':'BFC','90':'BFC',
+    '22':'BRE','29':'BRE','35':'BRE','56':'BRE',
+    '18':'CVL','28':'CVL','36':'CVL','37':'CVL','41':'CVL','45':'CVL',
+    '20':'COR',
+    '08':'GES','10':'GES','51':'GES','52':'GES','54':'GES','55':'GES','57':'GES','67':'GES','68':'GES','88':'GES',
+    '02':'HDF','59':'HDF','60':'HDF','62':'HDF','80':'HDF',
+    '75':'IDF','77':'IDF','78':'IDF','91':'IDF','92':'IDF','93':'IDF','94':'IDF','95':'IDF',
+    '14':'NOR','27':'NOR','50':'NOR','61':'NOR','76':'NOR',
+    '16':'NAQ','17':'NAQ','19':'NAQ','23':'NAQ','24':'NAQ','33':'NAQ','40':'NAQ','47':'NAQ','64':'NAQ','79':'NAQ','86':'NAQ','87':'NAQ',
+    '09':'OCC','11':'OCC','12':'OCC','30':'OCC','31':'OCC','32':'OCC','34':'OCC','46':'OCC','48':'OCC','65':'OCC','66':'OCC','81':'OCC','82':'OCC',
+    '44':'PDL','49':'PDL','53':'PDL','72':'PDL','85':'PDL',
+    '04':'PAC','05':'PAC','06':'PAC','13':'PAC','83':'PAC','84':'PAC',
+    '971':'OM','972':'OM','973':'OM','974':'OM',
+}
+df_regio = df_vrais.copy()
+df_regio['region'] = df_regio['dpt'].map(DPT_REGION)
+
+def _indice_regionalite(sub):
+    top = sub.groupby('preusuel')['nombre'].sum().nlargest(100).index
+    s = sub[sub['preusuel'].isin(top)]
+    total_region = s.groupby('region')['nombre'].sum()
+    part = s.groupby(['preusuel', 'region'])['nombre'].sum().unstack(fill_value=0)
+    part = part.div(total_region, axis=1)
+    return part.std(axis=1).mean()
+
+lignes_regio = []
+for (annee, sexe_val), sub in df_regio.groupby(['annais', 'sexe']):
+    lignes_regio.append({'annais': annee, 'sexe': sexe_val,
+                         'indice_regio': _indice_regionalite(sub)})
+regio_metrique = pd.DataFrame(lignes_regio)
+
 # PRÉPARATION DES DONNÉES
 # -------------------------
 
@@ -150,6 +191,17 @@ df_duree['valeur'] = df_duree['duree_miroir']
 df_duree['valeur_abs'] = df_duree['valeur'].abs()
 df_duree['titre_affiche'] = 'Durée du règne du prénom n°1'
 
+# ====== COUCHE 4 : indice de régionalité (global, indépendant du prénom) ======
+df_regio_layer = regio_metrique.copy()
+df_regio_layer['sexe'] = df_regio_layer['sexe'].astype(str).replace({'1': 'Homme', '2': 'Femme'})
+df_regio_layer['regio_miroir'] = np.where(
+    df_regio_layer['sexe'] == 'Homme', df_regio_layer['indice_regio'], -df_regio_layer['indice_regio']
+)
+df_regio_layer['metrique'] = 'Indice de régionalité (global)'
+df_regio_layer['valeur'] = df_regio_layer['regio_miroir']
+df_regio_layer['valeur_abs'] = df_regio_layer['valeur'].abs()
+df_regio_layer['titre_affiche'] = 'Régionalité des prénoms (écart-type entre régions)'
+
 # CONSTRUCTION DE LA VISU
 # -----------------------
 
@@ -164,7 +216,8 @@ selection = alt.selection_point(
 
 # Dropdown métrique (défini ici car référencé par le scatter ET l'aire)
 metrique_dropdown = alt.binding_select(
-    options=['Part H/F du prénom', 'Part du top 1 (global)', 'Durée du règne du top 1 (global)'],
+    options=['Part H/F du prénom', 'Part du top 1 (global)',
+             'Durée du règne du top 1 (global)', 'Indice de régionalité (global)'],
     name='Métrique : '
 )
 param_metrique = alt.selection_point(
@@ -224,7 +277,7 @@ scatter_plot = ligne_zero + scatter_plot
 couche_prenom = alt.Chart(df_prenom).mark_area(opacity=0.7).encode(
     x=alt.X('annais:Q', title='Année de naissance', axis=alt.Axis(format='d')), 
     y=alt.Y('valeur:Q', 
-            title='Valeur (H en +, F en -) — % ou nb d\'années selon la métrique'),
+            title='Hommes (+) / Femmes (−)'),
     color=alt.Color('sexe:N', 
                     title='Sexe', 
                     scale=alt.Scale(domain=['Homme', 'Femme'], range=['#2a9d8f', '#e76f51']),
@@ -277,8 +330,24 @@ couche_duree = alt.Chart(df_duree).mark_area(opacity=0.7).encode(
     param_metrique
 )
 
+# Couche 4 : INDICE DE RÉGIONALITÉ — globale, valeur d'écart-type (petite)
+couche_regio = alt.Chart(df_regio_layer).mark_area(opacity=0.7).encode(
+    x=alt.X('annais:Q', axis=alt.Axis(format='d')), 
+    y=alt.Y('valeur:Q'),
+    color=alt.Color('sexe:N', 
+                    scale=alt.Scale(domain=['Homme', 'Femme'], range=['#2a9d8f', '#e76f51']),
+                    legend=alt.Legend(orient='top')),
+    tooltip=[
+        alt.Tooltip('annais:Q', title='Année', format='d'),
+        alt.Tooltip('sexe:N', title='Sexe'),
+        alt.Tooltip('valeur_abs:Q', title='Indice de régionalité', format='.4f')
+    ]
+).transform_filter(
+    param_metrique
+)
+
 courbes = alt.layer(
-    couche_prenom, couche_top1, couche_duree
+    couche_prenom, couche_top1, couche_duree, couche_regio
 ).properties(
     width=450,
     height=400
@@ -327,7 +396,18 @@ titre_duree = alt.Chart(df_duree).mark_text(
 ).transform_aggregate(
     groupby=['titre_affiche']
 )
-titre_dynamique = (titre_prenom + titre_top1 + titre_duree).properties(
+# Couche titre RÉGIONALITÉ (filtrée par métrique seule) : libellé neutre.
+titre_regio = alt.Chart(df_regio_layer).mark_text(
+    align='center', baseline='middle', fontSize=18, fontWeight='bold',
+    color='#333', x=225, y=20
+).encode(
+    text='titre_affiche:N'
+).transform_filter(
+    param_metrique
+).transform_aggregate(
+    groupby=['titre_affiche']
+)
+titre_dynamique = (titre_prenom + titre_top1 + titre_duree + titre_regio).properties(
     width=450,
     height=40,
     title='2. Évolution temporelle'
