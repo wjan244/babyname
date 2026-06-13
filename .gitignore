@@ -1,5 +1,8 @@
 data/
+tp_references/
 *.json
 *.html
 
 altair-data-*.json__MACOSX/
+__pycache__/
+__MACOSX/
