@@ -7,7 +7,7 @@ import urllib.request
 import webbrowser
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-alt.data_transformers.enable("json")
+alt.data_transformers.enable("default")
 
 WIDTH = 600
 GOLDEN = (1 + 5 ** 0.5) / 2
@@ -250,9 +250,6 @@ periode_param = alt.param(
     bind=alt.binding_select(options=all_periodes, name="Période : "),
 )
 
-# Expression Vega qui est vraie quand la case correspond aux deux menus
-highlight_expr = "datum.preusuel == selected_prenom && datum.periode == selected_periode"
-
 # ── Facette (panneau gauche) ───────────────────────────────────────────────────
 yabs = prof["part_z"].abs().max()
 
@@ -264,15 +261,10 @@ bars = alt.Chart(prof).mark_bar().encode(
             color=alt.Color("signe:N",
                     scale=alt.Scale(domain=["+", "-"], range=["#d8642f", "#3a7ca5"]),
                     legend=None),
-    # la case sélectionnée reste opaque, les autres s'estompent
-    opacity=alt.condition(highlight_expr, alt.value(1.0), alt.value(0.35)),
     tooltip=["periode:O", "preusuel:N", "region:N",
              alt.Tooltip("part:Q", format=".2%"),
              alt.Tooltip("part_z:Q", format=".2f")],
 )
-# Note : les params sont définis sur map_chart (chart simple, pas de layer imbriqué)
-# pour éviter un bug Altair dans _combine_subchart_params avec les layers sans nom.
-# Les params Vega-Lite étant globaux dans le spec, bars peut quand même les référencer.
 
 # petit label du prénom, un seul par case (on prend la 1re ligne du groupe)
 labels = alt.Chart(prof).mark_text(
@@ -293,29 +285,41 @@ facet_chart = case.facet(
 ).resolve_scale(x="independent")
 
 # ── Carte (panneau droit) ──────────────────────────────────────────────────────
-# Approche « stats en premier » : on part de counts_map (preusuel × periode × region × part),
-# on filtre par la sélection, puis on récupère la géométrie via un lookup dans le GeoJSON.
-# Cela permet à la carte de réagir dynamiquement au clic dans la facette.
+# Approche « GeoJSON enrichi » : on intègre les données statistiques directement
+# dans les properties de chaque feature GeoJSON.  mark_geoshape fonctionne de façon
+# fiable uniquement avec des features GeoJSON valides (type + geometry + properties).
+# Le transform_filter filtre ensuite sur datum.properties.* côté Vega-Lite.
 
-# Les clés dans LookupData doivent être des champs de premier niveau (pas des chemins imbriqués).
-# On aplatit les features GeoJSON en DataFrame : colonnes "nom" et "geometry".
-# Pandas peut stocker des dicts dans une colonne objet ; Altair les sérialise correctement en JSON.
-geo_df = pd.DataFrame([
-    {"nom": f["properties"]["nom"], "geometry": f["geometry"]}
-    for f in geojson["features"]
-])
+geo_by_nom = {f["properties"]["nom"]: f["geometry"] for f in geojson["features"]}
+
+# Un feature par (preusuel, periode, region) — la géométrie est répétée mais c'est léger
+features_enrichis = [
+    {
+        "type": "Feature",
+        "geometry": geo_by_nom[row["region"]],
+        "properties": {
+            "nom": row["region"],
+            "preusuel": str(row["preusuel"]),
+            "periode": int(row["periode"]),
+            "part": float(row["part"]),
+        },
+    }
+    for _, row in counts_map.iterrows()
+    if row["region"] in geo_by_nom
+]
 
 map_chart = (
-    alt.Chart(counts_map)
+    alt.Chart(alt.InlineData(
+        values={"type": "FeatureCollection", "features": features_enrichis},
+        format=alt.DataFormat(property="features"),
+    ))
     .mark_geoshape(stroke="white", strokeWidth=0.5)
-    .transform_filter(highlight_expr)
-    .transform_lookup(
-        lookup="region",
-        from_=alt.LookupData(geo_df, key="nom", fields=["geometry"]),
+    .transform_filter(
+        "datum.properties.preusuel == selected_prenom && datum.properties.periode == selected_periode"
     )
     .encode(
-        color=alt.Color("part:Q", scale=alt.Scale(scheme="oranges"), title="Part (%)"),
-        tooltip=["region:N", alt.Tooltip("part:Q", format=".2%")],
+        color=alt.Color("properties.part:Q", scale=alt.Scale(scheme="oranges"), title="Part (%)"),
+        tooltip=["properties.nom:N", alt.Tooltip("properties.part:Q", format=".2%")],
     )
     .project(type="mercator")
     .properties(width=450, height=450, title="Part par région")
