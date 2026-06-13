@@ -27,7 +27,7 @@ The project addresses the following three exploratory visualization exercises:
 ### Visualization 3: Gender Effects
 * **Questions:** Are there gender effects in the data? Does the popularity of names given to both sexes evolve consistently? 
 * *(Note: This dataset treats sex as binary; this is a structural simplification that carries into this assignment but does not generally hold true in reality).*
-* **File:** `viz3_fx.py`
+* **File:** `viz3.py`
 
 ---
 
