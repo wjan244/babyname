@@ -168,8 +168,9 @@ prof["part_std"] = prof.groupby(["periode", "preusuel"])["part_norm"].transform(
 prof["part_centree"] = prof["part_norm"] - prof["part_moy"]
 # prof["part_centree_abs"] = abs(prof["part"] - prof["part_moy"])
 
-# z-score : centré-réduit. ddof=0 implicite via transform("std")? -> non, pandas std() est ddof=1
-prof["part_z"] = prof["part_centree"]
+
+# Application de la racine carrée signée pour étirer les petites variations et tasser la Corse
+prof["part_z"] = np.sign(prof["part_centree"]) * np.sqrt(prof["part_centree"].abs())
 # prof["part_z"] = prof["part_centree"] / prof.groupby(["periode", "preusuel"])["part_centree_abs"].transform("sum")
 # prof["part_z_nostd"] = prof["part_centree"] #/ prof["part_std"]
 
