@@ -257,6 +257,7 @@ yabs = prof["part_z"].abs().max()
 bars = alt.Chart(prof).mark_bar().encode(
     x=alt.X("rang_region_case:O", title=None, axis=None),
     y=alt.Y("part_z:Q",
+            axis=alt.Axis(labels=False, ticks=False, domain=False),
             title=""),#"Écart à la moyenne (z-score)",
             # scale=alt.Scale(domain=[-yabs, yabs])),
             color=alt.Color("signe:N",
@@ -279,7 +280,7 @@ labels = alt.Chart(prof).mark_text(
 case = alt.layer(bars, labels).properties(width=80, height=70)
 
 facet_chart = case.facet(
-    row=alt.Row("periode:O", title="Écart à la moyenne nationale par période (début)", sort="descending"),
+    row=alt.Row("periode:O", title="Disparité par rapport à la moyenne nationale (par période)", sort="descending"),
     column=alt.Column("rang_prenom:O",
                       title="Prénoms (gauche = plus disparate)",
                       sort="ascending"),
