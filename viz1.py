@@ -178,6 +178,12 @@ log_y_param = alt.param(
     bind=alt.binding_checkbox(name="Log scale Y: "),
 )
 
+log_x_param = alt.param(
+    name="log_x_param",
+    value=False,
+    bind=alt.binding_checkbox(name="Log scale X: "),
+)
+
 brush_interval = alt.selection_interval(encodings=["x", "y"], empty=True)
 brush_point = alt.selection_point(fields=["prenom_genre"], toggle=True, empty=True)
 
@@ -193,8 +199,8 @@ scatter = (
         opacity=alt.condition(brush_interval & brush_point, alt.value(1.0), alt.value(0.15)),
         tooltip=["preusuel", "Sexe", "Naissances totales"],
     )
-    .transform_calculate(x_val="datum[x_param]", y_val="log_y_param ? log(datum[y_param]) : datum[y_param]")
-    .add_params(x_param, y_param, log_y_param, brush_interval, brush_point)
+    .transform_calculate(x_val="log_x_param ? log(datum[x_param]) : datum[x_param]", y_val="log_y_param ? log(datum[y_param]) : datum[y_param]")
+    .add_params(x_param, y_param, log_x_param, log_y_param, brush_interval, brush_point)
     .properties(width=WIDTH, height=WIDTH/GOLDEN)
 )
 
@@ -216,7 +222,6 @@ lines = (
                                   legend=alt.Legend(title="Sexe", symbolStrokeWidth=2, orient="none", legendX=2*WIDTH, legendY=10)),
         tooltip=["preusuel", "Sexe", "annais", "nombre"],
     )
-    .transform_calculate(x_val="datum[x_param]", y_val="log_y_param ? log(datum[y_param]) : datum[y_param]")
     .transform_filter(brush_interval & brush_point)
     .properties(width=WIDTH, height=WIDTH/GOLDEN)
 )
@@ -230,7 +235,6 @@ labels = (
         color=alt.Color("prenom_genre:N", legend=None),
         text="preusuel:N",
     )
-    .transform_calculate(x_val="datum[x_param]", y_val="log_y_param ? log(datum[y_param]) : datum[y_param]")
     .transform_filter(brush_interval & brush_point)
     .transform_joinaggregate(max_year="max(annais)", groupby=["prenom_genre"])
     .transform_filter(alt.datum.annais == alt.datum.max_year)
