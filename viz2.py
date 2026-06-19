@@ -143,6 +143,12 @@ selected = {}
 for periode, sub in counts.groupby("periode"):
     selected[periode] = select_names_for_period(sub)
 
+# ── Calcul du TOP NATIONAL par période (prénom #1 national) ─────────────────────
+top_national_by_periode = {}
+for periode, sub in counts.groupby("periode"):
+    top_national = sub.groupby("preusuel")["nombre"].sum().idxmax()
+    top_national_by_periode[periode] = top_national
+
 # ── Construction de prof : long format avec parts normalisées et centrées ───────
 # Long format des couples (période, prénom retenu)
 paires = pd.DataFrame(
@@ -179,6 +185,12 @@ prof["part_z"] = np.sign(prof["part_centree"]) * np.sqrt(prof["part_centree"].ab
 prof["part_z"] = prof["part_z"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
 prof["signe"] = np.where(prof["part_z"] >= 0, "+", "-")
+
+# Ajouter l'indicateur "top national"
+prof["is_top_national"] = prof.apply(
+    lambda row: row["preusuel"] == top_national_by_periode.get(row["periode"]),
+    axis=1
+)
 
 # ── Ordre des régions et des prénoms dans chaque case ─────────────────────────
 
@@ -283,7 +295,8 @@ facet_chart = case.facet(
     row=alt.Row("periode:O", title="Disparité par rapport à la moyenne nationale (par période)", sort="descending"),
     column=alt.Column("rang_prenom:O",
                       title="Prénoms (gauche = plus disparate)",
-                      sort="ascending"),
+                      sort="ascending",
+                      header=alt.Header(labelOrient="bottom")),
 ).resolve_scale(x="independent")
 
 # ── Carte (panneau droit) ──────────────────────────────────────────────────────
@@ -291,6 +304,9 @@ facet_chart = case.facet(
 # dans les properties de chaque feature GeoJSON.  mark_geoshape fonctionne de façon
 # fiable uniquement avec des features GeoJSON valides (type + geometry + properties).
 # Le transform_filter filtre ensuite sur datum.properties.* côté Vega-Lite.
+
+# Calculer le max global de la part pour une échelle fixe
+max_part_global = counts_map["part"].max()
 
 geo_by_nom = {f["properties"]["nom"]: f["geometry"] for f in geojson["features"]}
 
@@ -304,6 +320,7 @@ features_enrichis = [
             "preusuel": str(row["preusuel"]),
             "periode": int(row["periode"]),
             "part": float(row["part"]),
+            "is_top_national": row["preusuel"] == top_national_by_periode.get(int(row["periode"])),
         },
     }
     for _, row in counts_map.iterrows()
@@ -320,7 +337,7 @@ map_chart = (
         "datum.properties.preusuel == selected_prenom && datum.properties.periode == selected_periode"
     )
     .encode(
-        color=alt.Color("properties.part:Q", scale=alt.Scale(scheme="oranges"), title="Part (%)"),
+        color=alt.Color("properties.part:Q", scale=alt.Scale(scheme="purples", type="log", domain=[0.0001, max_part_global]), title="Part (%)"),
         tooltip=["properties.nom:N", alt.Tooltip("properties.part:Q", format=".2%")],
     )
     .project(type="mercator")
@@ -329,7 +346,20 @@ map_chart = (
 )
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
-dashboard = facet_chart | map_chart
+
+dashboard = (facet_chart | map_chart).properties(
+    title=alt.TitleParams(
+        "Disparité géographique des prénoms français (1900-2021) \n \n",
+        subtitle=[" ",
+                  "Visualisation de l'évolution des prénoms français par région et période.",
+                  "L'indice de disparité mesure la concentration régionale : plus la couleur est foncée, plus le prénom est concentré dans certaines régions.",
+                  " "," "],
+        anchor="middle",
+        fontSize=18,
+        subtitleFontSize=12,
+        subtitleColor="gray",
+    )
+)
 
 # ── Sauvegarde et ouverture ────────────────────────────────────────────────────
 file = "viz2.html"
