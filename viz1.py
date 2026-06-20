@@ -169,8 +169,8 @@ df_name = df_name.rename(columns={
     "part_naisssance_min": "Part de naissance minimale",
     "part_naisssance_max": "Part de naissance maximale",
     "delta_popularite": "Delta popularité",
-    "delta_pdm_max": "Max différentielle part de naissance",
-    "delta_pdm_min": "Min différentielle part de naissance",
+    "delta_pdm_max": "Max différentielle relative part de naissance",
+    "delta_pdm_min": "Min différentielle relative part de naissance",
     "cwt_sharpness_score": "Indice de popularité éclair",
 })
 df_year_top = df_year_top.rename(columns={"part_de_naissance": "Part de naissance"})
@@ -188,8 +188,8 @@ columns = [
     "Delta popularité",
     "Années top 10",
     "Années top 100",
-    "Max différentielle part de naissance",
-    "Min différentielle part de naissance",
+    "Max différentielle relative part de naissance",
+    "Min différentielle relative part de naissance",
 ]
 
 # Groupe labels for the toggle
@@ -212,15 +212,15 @@ y_param = alt.param(
     value="Indice de popularité éclair",
     bind=alt.binding_select(options=columns, name="Y: "),
 )
-log_y_param = alt.param(
-    name="log_y_param",
-    value=False,
-    bind=alt.binding_checkbox(name="Log scale Y: "),
-)
 log_x_param = alt.param(
     name="log_x_param",
     value=False,
     bind=alt.binding_checkbox(name="Log scale X: "),
+)
+log_y_param = alt.param(
+    name="log_y_param",
+    value=False,
+    bind=alt.binding_checkbox(name="Log scale Y: "),
 )
 
 groupe_param = alt.param(
@@ -245,8 +245,8 @@ columns = [
     "Delta popularité",
     "Années top 10",
     "Années top 100",
-    "Max différentielle part de naissance",
-    "Min différentielle part de naissance",
+    "Max différentielle relative part de naissance",
+    "Min différentielle relative part de naissance",
 ]
 
 
@@ -260,7 +260,7 @@ PRESETS = {
     # "Descente progressive":                         ("Max différentielle part de naissance",  "Min différentielle part de naissance", ["HÉLÈNE_F","ODETTE_F","SUZANNE_F","INÈS_F","ZOÉ_F"],                                                                                                                                                                      POP),
     "Prénoms intemporels":                          ("Part de naissance minimale",            "Années top 100",                      ["PAUL_M","PIERRE_M","CHARLES_M"],                                                                                                                                                                                           POP),
     "Pic de popularité bref":                       ("Année de popularité max",               "Indice de popularité éclair",         ["AUGUSTINE_F","GINETTE_F","SIMONNE_F","JEANNINE_F","DANIELLE_F","MARTINE_F","PASCALE_F","VALÉRIE_F","CORINNE_F","SEVERINE_F","JENNIFER_F","PASCALE_F","GEOFFREY_M","DYLAN_M","MATTEO_M","NOA_M","MAELYS_F","TIMEO_M"],       POP),
-    "Prénoms soudainement populaires":              ("Indice de popularité éclair",           "Max différentielle part de naissance",["ALBERT_M","NATHALIE_F","STEPHANIE_F","EMILIE_F","NICOLAS_M","CHRISTOPHE_M"],                                                                                                                                               POP),
+    "Prénoms soudainement populaires":              ("Indice de popularité éclair",           "Max différentielle relative part de naissance",["ALBERT_M","NATHALIE_F","STEPHANIE_F","EMILIE_F","NICOLAS_M","CHRISTOPHE_M"],                                                                                                                                               POP),
     "Prénoms avec perte popularité temporaire":     ("Année de popularité max",           "Indice de popularité éclair",["ROSE_F","VICTOR_M","SAMUEL_M","HÉLÈNE_F","REMY_F"],  POP),
     "Prénoms impopulaires":                         ("Année de popularité max",           "Popularité Cumulée",[],  RARE),
 }
@@ -293,8 +293,8 @@ def _preset_groupe_filter():
             expr = f"preset_param == '{label}' ? '{groupe}' : {expr}"
     return f"datum.groupe == ({expr})"
 
-x_val_expr = _preset_expr(0, "log_x_param ? log(datum[x_param]) : datum[x_param]")
-y_val_expr = _preset_expr(1, "log_y_param ? log(datum[y_param]) : datum[y_param]")
+x_val_expr = _preset_expr(0, "log_x_param ? log(max(datum[x_param], 1e-10)) / log(10) : datum[x_param]")
+y_val_expr = _preset_expr(1, "log_y_param ? log(max(datum[y_param], 1e-10)) / log(10) : datum[y_param]")
 
 preset_param = alt.param(
     name="preset_param",
@@ -310,8 +310,10 @@ scatter = (
     alt.Chart(df_scatter)
     .mark_point(size=10)
     .encode(
-        x=alt.X("x_val:Q", title="", scale=alt.Scale(zero=False), axis=alt.Axis(format="d")),
-        y=alt.Y("y_val:Q", title="", scale=alt.Scale(zero=False), axis=alt.Axis(minExtent=60)),
+        x=alt.X("x_val:Q", title="", scale=alt.Scale(zero=False),
+                axis=alt.Axis(labelExpr="(log_x_param && preset_param == 'Personnalisé') ? format(pow(10, datum.value), '~g') : format(datum.value, '~g')")),
+        y=alt.Y("y_val:Q", title="", scale=alt.Scale(zero=False),
+                axis=alt.Axis(minExtent=60, labelExpr="(log_y_param && preset_param == 'Personnalisé') ? format(pow(10, datum.value), '~g') : format(datum.value, '~g')")),
         color=alt.Color("prenom_genre:N", legend=None),
         shape=alt.Shape("Sexe:N", scale=alt.Scale(domain=["M", "F"], range=["square", "circle"]),
                         legend=alt.Legend(title="Sexe", symbolSize=60, orient="top-left")),
@@ -344,7 +346,6 @@ lines = (
     )
     .transform_filter(_preset_groupe_filter())
     .transform_filter(_preset_names_filter())
-    .transform_calculate(x_val="log_x_param ? log(datum[x_param]) : datum[x_param]", y_val="log_y_param ? log(datum[y_param]) : datum[y_param]")
     .transform_filter(brush_interval & brush_point)
     .properties(width=WIDTH, height=WIDTH/GOLDEN, title="Évolution temporelle en part de naissance des prénoms sélectionnés")
 )
@@ -399,8 +400,8 @@ description = """
     <li><b>Delta popularité</b> : Différence entre le rang le plus bas et le plus haut atteints sur toute la période.</li>
     <li><b>Années top 10 / top 100</b> : Nombre d'années où le prénom figurait parmi les 10 (resp. 100) prénoms les plus donnés, au sein de son sexe.</li>
     <li><b>Indice de popularité éclair</b> : Score issu d'une transformée en ondelettes continue (chapeau mexicain) appliquée à la courbe de part de naissance normalisée.
-        Il mesure la netteté des pics de popularité : un score élevé signale une montée et chute rapides, un score faible une popularité lente et diffuse.</li>
-    <li><b>Max/Min différentielle part de naissance</b> : Maximum/Minimum de la différence relative entre la part de naissance d'un prénom d'une année à l'autre.</li>
+        Il mesure la netteté des pics de popularité : un score élevé signale une montée et decente rapide tandis qu'un score négatif indique une chute temporaire de la popularité.</li>
+    <li><b>Max/Min différentielle relative part de naissance</b> : Maximum/Minimum de la différence relative entre la part de naissance d'un prénom d'une année à l'autre.</li>
   </ul>
 </div>
 """
