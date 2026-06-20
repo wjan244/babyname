@@ -378,7 +378,7 @@ map_chart = (
         "datum.properties.preusuel == selected_prenom && datum.properties.periode == selected_periode"
     )
     .encode(
-        color=alt.Color("properties.part_normalized:Q", scale=alt.Scale(scheme="purples", type="sqrt", domain=[0, 1]), title="Popularité nationale"),
+        color=alt.Color("properties.part_normalized:Q", scale=alt.Scale(scheme="purples", domain=[0, 1]), title="Popularité nationale"),
         tooltip=[alt.Tooltip("properties.nom:N", title="Région"),
                  alt.Tooltip("properties.part:Q", format=".2%", title="Indice de disparité")],
     )
