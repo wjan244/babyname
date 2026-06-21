@@ -285,6 +285,16 @@ counts_map["max_national_periode"] = counts_map["periode"].map(max_national_by_p
 counts_map["total_national"] = counts_map["total_national"].fillna(1)
 counts_map["part_normalized"] = counts_map["total_national"] / counts_map["max_national_periode"]
 
+# ── TÂCHE 2 : couleur de carte = part de naissance, normalisée par le MAX de l'année ──
+# Les régions sans ce prénom (remplies à part=1 plus haut) doivent valoir 0 (= blanc),
+# pas 1. On les remet à 0 pour le calcul des couleurs.
+counts_map["part_carte"] = counts_map["part"].where(counts_map["part"] != 1, 0.0)
+# max de part observé dans chaque période (sur tous les prénoms retenus et régions)
+max_part_by_periode = counts_map.groupby("periode")["part_carte"].max().to_dict()
+counts_map["max_part_periode"] = counts_map["periode"].map(max_part_by_periode)
+# part rapportée au max de l'année -> 0 (blanc) à 1 (violet foncé), échelle linéaire fixe
+counts_map["part_sur_max_annee"] = counts_map["part_carte"] / counts_map["max_part_periode"]
+
 # ── Sélection interactive : menus déroulants pour choisir le prénom et la période ─
 # Valeur par défaut : prénom le plus populaire de la période la plus récente
 default_periode = int(max(selected.keys()))
@@ -360,6 +370,7 @@ features_enrichis = [
             "periode": int(row["periode"]),
             "part": float(row["part"]),
             "part_normalized": float(row["part_normalized"]),
+            "part_sur_max_annee": float(row["part_sur_max_annee"]),
             "is_top_national": row["preusuel"] == top_national_by_periode.get(int(row["periode"])),
         },
     }
@@ -377,7 +388,9 @@ map_chart = (
         "datum.properties.preusuel == selected_prenom && datum.properties.periode == selected_periode"
     )
     .encode(
-        color=alt.Color("properties.part_normalized:Q", scale=alt.Scale(scheme="purples", domain=[0, 1]), title="Popularité nationale"),
+        color=alt.Color("properties.part_sur_max_annee:Q",
+                        scale=alt.Scale(scheme="purples", domain=[0, 1]),
+                        title="Part / max de l'année"),
         tooltip=[alt.Tooltip("properties.nom:N", title="Région"),
                  alt.Tooltip("properties.part:Q", format=".2%", title="Part des naissances")],
     )
