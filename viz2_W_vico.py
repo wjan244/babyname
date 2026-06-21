@@ -9,10 +9,11 @@ import webbrowser
 # ── Configuration ──────────────────────────────────────────────────────────────
 alt.data_transformers.enable("default")
 
-WIDTH = 600
-GOLDEN = (1 + 5 ** 0.5) / 2
 PERIOD = 20
-N_NAMES = 10
+
+# Éligibilité grille de droite : un prénom doit figurer dans le top-TOP_REGION
+# (par effectif) d'au moins une région pour être candidat. Plus petit = plus strict.
+TOP_REGION = 50
 
 GEO_PATH = "data/regions.geojson"
 
@@ -110,34 +111,111 @@ counts["part"] = counts["nombre"] / counts["total_region_periode"]
 counts = counts[counts["preusuel"] != "_PRENOMS_RARES"]
 
 # ── Sélection des prénoms : 5 populaires + 5 régionaux (hors populaires) ─────────
-REGIONS = sorted(set(DPT_TO_REGION.values()))
-N_POP = 5      # nombre de prénoms populaires (grille de gauche)
-N_REG = 5      # nombre de prénoms régionalement atypiques (grille de droite)
+N_POP = 5         # nombre de prénoms populaires (grille de gauche)
+N_REG = 5         # nombre de prénoms régionalement marqués (grille de droite)
+
+
+def shannon_entropy(parts):
+    """Entropie de Shannon des parts régionales d'un prénom.
+    Faible = concentré sur quelques régions ; élevée = réparti uniformément."""
+    p = np.asarray(parts, dtype=float)
+    s = p.sum()
+    if s <= 0:
+        return np.nan
+    p = p[p > 0] / s
+    return -(p * np.log(p)).sum()
+
 
 def select_national(sub, k):
     """Les k prénoms les plus donnés au niveau NATIONAL sur la période."""
     pop_nat = sub.groupby("preusuel")["nombre"].sum()
     return pop_nat.nlargest(k).index.tolist()
 
+
 def select_regional(sub, k, exclure):
-    """Les k prénoms les plus ATYPIQUES régionalement (n°1 dans une région,
-    puis n°2, etc.), en EXCLUANT ceux déjà retenus comme populaires."""
+    """Sélection en k tours, sur un ensemble de régions qui rétrécit.
+
+    À chaque tour :
+      1. on calcule l'entropie de Shannon de chaque prénom éligible sur les
+         régions ENCORE ACTIVES (parts renormalisées sur ces régions) ;
+      2. on retient le prénom à plus faible entropie (= le plus concentré) ;
+      3. on repère SA région de plus forte part et on l'écarte globalement
+         pour tous les tours suivants ;
+      4. on retire ce prénom du pool, AINSI QUE tout prénom dont l'éligibilité
+         (top-TOP_REGION) ne tenait qu'à la région qu'on vient d'écarter —
+         c'est-à-dire les prénoms présents dans le top de cette seule région et
+         d'aucune autre. Ces prénoms ont une faible entropie pour la seule raison
+         qu'ils sont quasi absents ailleurs (artefact de rareté), pas parce
+         qu'ils sont caractéristiques d'une autre région.
+
+    Effet : une région structurellement « capturante » (ex. Corse) tombe au
+    premier tour, et les prénoms qui ne doivent leur concentration qu'à elle
+    disparaissent avec elle.
+
+    Éligibilité : figurer dans le top-TOP_REGION (par effectif) d'au moins une
+    région, hors prénoms déjà retenus comme populaires.
+    """
     sub = sub.copy()
-    sub["rang_region"] = (
-        sub.groupby("region")["part"].rank(ascending=False, method="first")
-    )
-    pop_nat = sub.groupby("preusuel")["nombre"].sum()
     exclure = set(exclure)
+
+    # Éligibilité : top-TOP_REGION par effectif dans au moins une région
+    sub["rang_eff_region"] = (
+        sub.groupby("region")["nombre"].rank(ascending=False, method="first")
+    )
+    est_top = sub["rang_eff_region"] <= TOP_REGION
+
+    # Pour chaque prénom : ensemble des régions où il est dans le top-TOP_REGION
+    top_regions_par_prenom = (
+        sub.loc[est_top]
+        .groupby("preusuel")["region"]
+        .agg(set)
+        .to_dict()
+    )
+
+    eligibles = set(sub.loc[est_top, "preusuel"].unique()) - exclure
+
+    regions_actives = set(sub["region"].unique())
     retenus = []
-    rang = 1
-    n_regions = sub["region"].nunique()
-    while len(set(retenus)) < k and rang <= n_regions * 5:
-        candidats = sub.loc[sub["rang_region"] == rang, "preusuel"].unique().tolist()
-        nouveaux = [n for n in candidats if n not in set(retenus) and n not in exclure]
-        nouveaux = sorted(nouveaux, key=lambda n: pop_nat.get(n, 0), reverse=True)
-        retenus.extend(nouveaux)
-        rang += 1
-    return retenus[:k]
+
+    for _ in range(k):
+        if not eligibles or not regions_actives:
+            break
+
+        sub_act = sub[
+            sub["preusuel"].isin(eligibles) & sub["region"].isin(regions_actives)
+        ]
+        if sub_act.empty:
+            break
+
+        # Entropie de chaque prénom éligible sur les régions actives
+        entropie_par_prenom = (
+            sub_act.groupby("preusuel")["part"]
+            .apply(lambda s: shannon_entropy(s.values))
+            .dropna()
+        )
+        if entropie_par_prenom.empty:
+            break
+
+        # Prénom le plus concentré sur les régions restantes
+        prenom = entropie_par_prenom.idxmin()
+        retenus.append(prenom)
+
+        # Sa région de plus forte part (parmi les régions actives) -> écartée
+        lignes_prenom = sub_act[sub_act["preusuel"] == prenom]
+        region_dominante = lignes_prenom.loc[lignes_prenom["part"].idxmax(), "region"]
+
+        regions_actives.discard(region_dominante)
+        eligibles.discard(prenom)
+
+        # Éviction des prénoms dont le seul top régional était cette région :
+        # leur top_regions ∩ regions_actives est désormais vide.
+        a_evincer = {
+            n for n in eligibles
+            if not (top_regions_par_prenom.get(n, set()) & regions_actives)
+        }
+        eligibles -= a_evincer
+
+    return retenus
 
 # Application période par période, pour les DEUX grilles
 selected_par_ref = {"national": {}, "regional": {}}
@@ -145,12 +223,6 @@ for periode, sub in counts.groupby("periode"):
     pops = select_national(sub, N_POP)
     selected_par_ref["national"][periode] = pops
     selected_par_ref["regional"][periode] = select_regional(sub, N_REG, exclure=pops)
-
-# ── Calcul du TOP NATIONAL par période (prénom #1 national) ─────────────────────
-top_national_by_periode = {}
-for periode, sub in counts.groupby("periode"):
-    top_national = sub.groupby("preusuel")["nombre"].sum().idxmax()
-    top_national_by_periode[periode] = top_national
 
 # ── Construction de prof : fonction réutilisable pour CHAQUE référentiel ─────────
 def construire_prof(selected):
@@ -168,20 +240,16 @@ def construire_prof(selected):
         on=["periode", "preusuel", "region"], how="left"
     )
     prof["part"] = prof["part"].fillna(0.0)
-    prof["part_norm"] = prof["part"].fillna(0.0) / prof.groupby(["periode", "preusuel"])["part"].transform("sum")
+    prof["part_norm"] = prof["part"] / prof.groupby(["periode", "preusuel"])["part"].transform("sum")
 
     prof["part_moy"] = prof.groupby(["periode", "preusuel"])["part_norm"].transform("mean")
-    prof["part_std"] = prof.groupby(["periode", "preusuel"])["part_norm"].transform("std")
     prof["part_centree"] = prof["part_norm"] - prof["part_moy"]
 
-    prof["part_z"] = np.sign(prof["part_centree"]) * np.sqrt(prof["part_centree"].abs())
-    prof["part_z"] = prof["part_z"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    prof["signe"] = np.where(prof["part_z"] >= 0, "+", "-")
-
-    prof["is_top_national"] = prof.apply(
-        lambda row: row["preusuel"] == top_national_by_periode.get(row["periode"]),
-        axis=1
-    )
+    # Racine signée de l'écart à la moyenne : compresse les grands écarts pour
+    # la hauteur des barres. Ce n'est PAS un z-score (pas de division par l'écart-type).
+    prof["ecart_racine_signe"] = np.sign(prof["part_centree"]) * np.sqrt(prof["part_centree"].abs())
+    prof["ecart_racine_signe"] = prof["ecart_racine_signe"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    prof["signe"] = np.where(prof["ecart_racine_signe"] >= 0, "+", "-")
 
     prof["rang_region_case"] = (
         prof.groupby(["periode", "preusuel"])["part"]
@@ -189,17 +257,9 @@ def construire_prof(selected):
         .astype(int)
     )
 
-    def entropie(parts):
-        p = np.asarray(parts, dtype=float)
-        s = p.sum()
-        if s <= 0:
-            return np.nan
-        p = p[p > 0] / s
-        return -(p * np.log(p)).sum()
-
     disp = (
         prof.groupby(["periode", "preusuel"])["part"]
-        .apply(lambda s: entropie(s.values))
+        .apply(lambda s: shannon_entropy(s.values))
         .rename("entropie")
         .reset_index()
     )
@@ -229,61 +289,41 @@ with open(GEO_PATH, encoding="utf-8") as f:
     geojson = json.load(f)
 
 # ── Données carte : counts filtré aux seuls prénoms retenus ───────────────────
-# On ne passe au frontend que les lignes utiles (≈ N_NAMES × n_periodes × n_regions)
+# On ne passe au frontend que les lignes utiles (≈ (N_POP+N_REG) × n_periodes × n_regions)
 selected_pairs = prof[["preusuel", "periode"]].drop_duplicates()
 counts_map = counts.merge(selected_pairs, on=["preusuel", "periode"])
 counts_map["periode"] = counts_map["periode"].astype(int)
 counts_map["preusuel"] = counts_map["preusuel"].astype(str)
 
-# Compléter avec les régions manquantes (mettre part=1 pour celles sans naissance)
-regions_list = list(set(counts["region"]))  # toutes les régions du dataset
-preusuel_periode_pairs = counts_map[["preusuel", "periode"]].drop_duplicates()
+# Compléter avec les régions manquantes : pour chaque (prénom, période) retenu,
+# on veut une ligne par région. Les régions sans naissance reçoivent le sentinel
+# part=1, neutralisé en 0 plus bas pour la couleur (part_carte).
+regions_list = sorted(counts["region"].unique())
+paires = counts_map[["preusuel", "periode"]].drop_duplicates()
 
-# Créer toutes les combinaisons manquantes
-missing_rows = []
-for _, row in preusuel_periode_pairs.iterrows():
-    preusuel = row["preusuel"]
-    periode = row["periode"]
-    existing_regions = set(counts_map[(counts_map["preusuel"] == preusuel) & 
-                                       (counts_map["periode"] == periode)]["region"])
-    for region in regions_list:
-        if region not in existing_regions:
-            missing_rows.append({
-                "preusuel": preusuel,
-                "periode": periode,
-                "region": region,
-                "part": 1  # valeur par défaut pour régions sans naissance
-            })
+# Grille complète (prénom, période) × région via produit cartésien
+grille_complete = paires.merge(pd.DataFrame({"region": regions_list}), how="cross")
 
-if missing_rows:
-    missing_df = pd.DataFrame(missing_rows)
-    counts_map = pd.concat([counts_map, missing_df], ignore_index=True)
+# Lignes réellement observées, pour repérer les manquantes
+observees = counts_map[["preusuel", "periode", "region"]]
+manquantes = grille_complete.merge(
+    observees, on=["preusuel", "periode", "region"], how="left", indicator=True
+)
+manquantes = manquantes[manquantes["_merge"] == "left_only"].drop(columns="_merge")
+manquantes["part"] = 1  # sentinel pour « région sans ce prénom »
 
-# Calculer le total national de naissances par prénom par période
-# (somme sur toutes les régions)
-total_national_by_prenom_periode = counts.groupby(["preusuel", "periode"])["nombre"].sum().reset_index()
-total_national_by_prenom_periode = total_national_by_prenom_periode.rename(columns={"nombre": "total_national"})
+counts_map = pd.concat([counts_map, manquantes], ignore_index=True)
 
-# Merger avec counts_map pour avoir le total national
-counts_map = counts_map.merge(total_national_by_prenom_periode, on=["preusuel", "periode"], how="left")
-
-# Calculer le max du total national par période
-max_national_by_periode = total_national_by_prenom_periode.groupby("periode")["total_national"].max().to_dict()
-counts_map["max_national_periode"] = counts_map["periode"].map(max_national_by_periode)
-
-# Normaliser par le max national de la période
-# Pour les régions manquantes (part=1), on utilise total_national=1 (valeur par défaut)
-counts_map["total_national"] = counts_map["total_national"].fillna(1)
-counts_map["part_normalized"] = counts_map["total_national"] / counts_map["max_national_periode"]
-
-# ── TÂCHE 2 : couleur de carte = part de naissance, normalisée par le MAX de l'année ──
-# Les régions sans ce prénom (remplies à part=1 plus haut) doivent valoir 0 (= blanc),
-# pas 1. On les remet à 0 pour le calcul des couleurs.
+# ── Couleur de carte : part de naissance, normalisée par le MAX de la période ──
+# Les régions sans ce prénom (sentinel part=1) doivent valoir 0 (= blanc), pas 1.
 counts_map["part_carte"] = counts_map["part"].where(counts_map["part"] != 1, 0.0)
+# Le sentinel a joué son rôle : on l'efface de `part` pour qu'il ne fuie pas dans
+# le tooltip (sinon une région sans le prénom afficherait « 100.00% »).
+counts_map["part"] = counts_map["part_carte"]
 # max de part observé dans chaque période (sur tous les prénoms retenus et régions)
 max_part_by_periode = counts_map.groupby("periode")["part_carte"].max().to_dict()
 counts_map["max_part_periode"] = counts_map["periode"].map(max_part_by_periode)
-# part rapportée au max de l'année -> 0 (blanc) à 1 (violet foncé), échelle linéaire fixe
+# part rapportée au max de la période -> 0 (blanc) à 1 (violet foncé), échelle linéaire fixe
 counts_map["part_sur_max_annee"] = counts_map["part_carte"] / counts_map["max_part_periode"]
 
 # ── Sélection interactive : menus déroulants pour choisir le prénom et la période ─
@@ -310,7 +350,7 @@ def faire_facette(prof_sous, titre_colonnes):
     """Construit une grille de facettes à partir d'un sous-ensemble de prof."""
     bars = alt.Chart(prof_sous).mark_bar().encode(
         x=alt.X("rang_region_case:O", title=None, axis=None),
-        y=alt.Y("part_z:Q",
+        y=alt.Y("ecart_racine_signe:Q",
                 axis=alt.Axis(labels=False, ticks=False, domain=False), title=""),
         color=alt.Color("signe:N",
                 scale=alt.Scale(domain=["+", "-"], range=["#d8642f", "#3a7ca5"]),
@@ -359,9 +399,7 @@ features_enrichis = [
             "preusuel": str(row["preusuel"]),
             "periode": int(row["periode"]),
             "part": float(row["part"]),
-            "part_normalized": float(row["part_normalized"]),
             "part_sur_max_annee": float(row["part_sur_max_annee"]),
-            "is_top_national": row["preusuel"] == top_national_by_periode.get(int(row["periode"])),
         },
     }
     for _, row in counts_map.iterrows()
@@ -395,7 +433,7 @@ dashboard = (facet_national | facet_regional | map_chart).properties(
     title=alt.TitleParams(
         "Disparité géographique des prénoms français (1900-2021) \n \n",
         subtitle=[" ",
-                  "Visualisation de l'évolution des prénoms français par région et période.",
+                  "Visualisation des prénoms français par région et période.",
                   "L'indice de disparité mesure la concentration régionale : plus la couleur est foncée, plus le prénom est concentré dans certaines régions.",
                   " "," "],
         anchor="middle",
