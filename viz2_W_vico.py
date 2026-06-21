@@ -434,7 +434,7 @@ dashboard = (facet_national | facet_regional | map_chart).properties(
         "Disparité géographique des prénoms français (1900-2021) \n \n",
         subtitle=[" ",
                   "Visualisation des prénoms français par région et période.",
-                  "L'indice de disparité mesure la concentration régionale : plus la couleur est foncée, plus le prénom est concentré dans certaines régions.",
+                  "L'indice de disparité mesure l'atypicité régionale : plus la barre est haute, plus le prénom est populaire dans cette région.",
                   " "," "],
         anchor="middle",
         fontSize=18,
