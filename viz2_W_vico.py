@@ -113,30 +113,13 @@ counts = counts[counts["preusuel"] != "_PRENOMS_RARES"]
 REGIONS = sorted(set(DPT_TO_REGION.values()))
 
 def select_names_for_period(sub):
-    """sub : counts restreint à une période. Renvoie la liste des N prénoms retenus."""
-    # rang du prénom DANS chaque région (1 = le plus donné), par part décroissante
-    sub = sub.copy()
-    sub["rang_region"] = (
-        sub.groupby("region")["part"].rank(ascending=False, method="first")
-    )
-    # popularité nationale du prénom sur la période (pour départager à la troncature)
+    """sub : counts restreint à une période. Renvoie les N prénoms les plus
+    donnés AU NIVEAU NATIONAL sur la période (toutes régions confondues).
+    La sélection ne regarde pas les régions : on prend les plus courants,
+    et c'est l'ORDRE (par cross-entropie, calculé plus bas) qui révèle
+    ensuite lesquels sont régionalement concentrés."""
     pop_nat = sub.groupby("preusuel")["nombre"].sum()
-
-    retenus = []          # ordre d'ajout
-    rang = 1
-    n_regions = sub["region"].nunique()
-    while len(set(retenus)) < N_NAMES and rang <= n_regions * 5:  # garde-fou
-        # prénoms qui sont au rang `rang` dans au moins une région
-        candidats = sub.loc[sub["rang_region"] == rang, "preusuel"].unique().tolist()
-        # on ne garde que les nouveaux
-        nouveaux = [n for n in candidats if n not in set(retenus)]
-        # on les trie par popularité nationale décroissante pour que la troncature
-        # éventuelle retire bien les moins populaires de ce rang
-        nouveaux = sorted(nouveaux, key=lambda n: pop_nat.get(n, 0), reverse=True)
-        retenus.extend(nouveaux)
-        rang += 1
-
-    return retenus[:N_NAMES]
+    return pop_nat.nlargest(N_NAMES).index.tolist()
 
 # Application période par période
 selected = {}
