@@ -319,8 +319,7 @@ bars = alt.Chart(prof).mark_bar().encode(
     tooltip=[alt.Tooltip("periode:O", title="Période"),
              alt.Tooltip("preusuel:N", title="Prénom"),
              alt.Tooltip("region:N", title="Région"),
-             alt.Tooltip("part:Q", format=".2%", title="Indice de disparité"),
-             alt.Tooltip("part_z:Q", format=".2f", title="Valeur normalisée")],
+             alt.Tooltip("part:Q", format=".2%", title="Part des naissances")],
 )
 
 # petit label du prénom, un seul par case (on prend la 1re ligne du groupe)
@@ -380,7 +379,7 @@ map_chart = (
     .encode(
         color=alt.Color("properties.part_normalized:Q", scale=alt.Scale(scheme="purples", domain=[0, 1]), title="Popularité nationale"),
         tooltip=[alt.Tooltip("properties.nom:N", title="Région"),
-                 alt.Tooltip("properties.part:Q", format=".2%", title="Indice de disparité")],
+                 alt.Tooltip("properties.part:Q", format=".2%", title="Part des naissances")],
     )
     .project(type="mercator")
     .properties(width=450, height=450, title="Part par région")
