@@ -205,68 +205,6 @@ df_regio_layer['valeur'] = df_regio_layer['regio_miroir']
 df_regio_layer['valeur_abs'] = df_regio_layer['valeur'].abs()
 df_regio_layer['titre_affiche'] = 'Régionalité des prénoms (écart-type entre régions)'
 
-# ============================================================
-# RANG N-IÈME : rang annuel de chaque prénom par (année, sexe)
-# ============================================================
-RANG_MAX = 100
-
-_rang_ann = totaux_prenom_an.copy()
-_rang_ann['rang'] = _rang_ann.groupby(['annais', 'sexe'])['nombre'].rank(
-    ascending=False, method='first'
-).astype(int)
-_rang_ann = _rang_ann[_rang_ann['rang'] <= RANG_MAX].copy()
-_rang_ann = _rang_ann.merge(totaux_annuels, on=['annais', 'sexe'], how='left')
-_rang_ann['part_rang'] = _rang_ann['nombre'] / _rang_ann['total_naissances_sexe']
-
-# Durée consécutive au rang N (même logique que la durée du règne du top 1)
-_rang_ann = _rang_ann.sort_values(['sexe', 'rang', 'annais'])
-_rang_ann['_bloc'] = _rang_ann.groupby(['sexe', 'rang'])['preusuel'].transform(
-    lambda x: (x != x.shift()).cumsum()
-)
-_rang_ann['duree_rang'] = _rang_ann.groupby(
-    ['sexe', 'rang', '_bloc']
-)['preusuel'].transform('size')
-_rang_ann = _rang_ann.drop(columns=['_bloc'])
-_rang_ann['sexe'] = _rang_ann['sexe'].astype(str).replace({'1': 'Homme', '2': 'Femme'})
-_rang_ann['part_miroir'] = np.where(
-    _rang_ann['sexe'] == 'Homme', _rang_ann['part_rang'], -_rang_ann['part_rang']
-)
-_rang_ann['duree_miroir'] = np.where(
-    _rang_ann['sexe'] == 'Homme', _rang_ann['duree_rang'], -_rang_ann['duree_rang']
-)
-rang_annuel = _rang_ann.reset_index(drop=True)
-
-# Indice de régionalité spécifique au prénom de rang N (écart-type des parts entre régions)
-_prenoms_rang = set(rang_annuel['preusuel'].unique())
-_df_rp = df_regio[df_regio['preusuel'].isin(_prenoms_rang)].dropna(subset=['region'])
-
-_total_reg_sexe = _df_rp.groupby(
-    ['annais', 'sexe', 'region']
-)['nombre'].sum().reset_index().rename(columns={'nombre': 'total_reg_sexe'})
-
-_nb_rp = _df_rp.groupby(
-    ['annais', 'sexe', 'preusuel', 'region']
-)['nombre'].sum().reset_index()
-_nb_rp = _nb_rp.merge(_total_reg_sexe, on=['annais', 'sexe', 'region'], how='left')
-_nb_rp['part_region'] = _nb_rp['nombre'] / _nb_rp['total_reg_sexe']
-
-_regio_prenom = _nb_rp.groupby(
-    ['annais', 'sexe', 'preusuel']
-)['part_region'].std().reset_index().rename(columns={'part_region': 'indice_regio'})
-_regio_prenom['sexe'] = _regio_prenom['sexe'].astype(str).replace({'1': 'Homme', '2': 'Femme'})
-
-rang_annuel = rang_annuel.merge(_regio_prenom, on=['annais', 'sexe', 'preusuel'], how='left')
-rang_annuel['regio_miroir'] = np.where(
-    rang_annuel['sexe'] == 'Homme', rang_annuel['indice_regio'], -rang_annuel['indice_regio']
-)
-
-# Classement global cumulatif (toutes années confondues) pour le titre dynamique
-rang_global_df = totaux_prenom_an.groupby(['sexe', 'preusuel'])['nombre'].sum().reset_index()
-rang_global_df['rang_global'] = rang_global_df.groupby('sexe')['nombre'].rank(
-    ascending=False, method='first'
-).astype(int)
-rang_global_df = rang_global_df[rang_global_df['rang_global'] <= RANG_MAX].copy()
-rang_global_df['sexe'] = rang_global_df['sexe'].astype(str).replace({'1': 'Homme', '2': 'Femme'})
 
 # CONSTRUCTION DE LA VISU
 # -----------------------
@@ -360,98 +298,60 @@ partie1 = alt.hconcat(
     )
 )
 
-# ── LIGNE 2 : sélecteur de rang ──────────────────────────────────────────────
-spinner_rang = alt.binding(input='text', name='Rang n° : ')
-param_rang = alt.param(name='rang_n', value='1', bind=spinner_rang)
-
-# Titre dynamique : prénom H et F de rang N dans le classement cumulatif
-_df_titre_h = rang_global_df[rang_global_df['sexe'] == 'Homme']
-_df_titre_f = rang_global_df[rang_global_df['sexe'] == 'Femme']
-
-_nom_h = alt.Chart(_df_titre_h).mark_text(
-    align='center', baseline='middle', fontSize=22, fontWeight='bold', color=COULEUR_HOMME
-).encode(text='preusuel:N', x=alt.value(225), y=alt.value(22)
-).transform_filter('datum.rang_global === toNumber(rang_n)'
-).transform_aggregate(groupby=['preusuel'])
-
-_nom_f = alt.Chart(_df_titre_f).mark_text(
-    align='center', baseline='middle', fontSize=22, fontWeight='bold', color=COULEUR_FEMME
-).encode(text='preusuel:N', x=alt.value(675), y=alt.value(22)
-).transform_filter('datum.rang_global === toNumber(rang_n)'
-).transform_aggregate(groupby=['preusuel'])
-
-titre_rang_dynamique = (_nom_h + _nom_f).add_params(param_rang).properties(width=900, height=45)
-
-# Graph 1 : Part du prénom occupant le rang N cette année-là
-graph_rang_part = alt.Chart(rang_annuel).mark_area(opacity=0.85).encode(
+# ── LIGNE 2 : trois graphes globaux statiques ────────────────────────────────
+graph_top1 = alt.Chart(df_top1).mark_area(opacity=0.85).encode(
     x=alt.X('annais:Q', title='Année', axis=alt.Axis(format='d')),
-    y=alt.Y('part_miroir:Q', title='Hommes (+) / Femmes (−)'),
+    y=alt.Y('valeur:Q', title='Hommes (+) / Femmes (−)'),
     color=alt.Color('sexe:N',
                     scale=alt.Scale(domain=['Homme', 'Femme'], range=[COULEUR_HOMME, COULEUR_FEMME]),
                     legend=None),
     tooltip=[
         alt.Tooltip('annais:Q', title='Année', format='d'),
         alt.Tooltip('sexe:N', title='Sexe'),
-        alt.Tooltip('preusuel:N', title='Prénom'),
-        alt.Tooltip('part_rang:Q', title='Part', format='.2%'),
+        alt.Tooltip('valeur_abs:Q', title='Part du top 1', format='.2%'),
+        alt.Tooltip('prenom_top1:N', title='N°1 de l\'année')
     ]
-).transform_filter(
-    'datum.rang === toNumber(rang_n)'
 ).properties(
     width=280, height=300,
-    title='Part du prénom de rang N'
+    title='Poids du prénom n°1'
 )
 
-# Graph 2 : Durée consécutive au rang N
-graph_rang_duree = alt.Chart(rang_annuel).mark_area(opacity=0.85).encode(
+graph_duree = alt.Chart(df_duree).mark_area(opacity=0.85).encode(
     x=alt.X('annais:Q', title='Année', axis=alt.Axis(format='d')),
-    y=alt.Y('duree_miroir:Q', title='Hommes (+) / Femmes (−)'),
+    y=alt.Y('valeur:Q', title='Hommes (+) / Femmes (−)'),
     color=alt.Color('sexe:N',
                     scale=alt.Scale(domain=['Homme', 'Femme'], range=[COULEUR_HOMME, COULEUR_FEMME]),
                     legend=None),
     tooltip=[
         alt.Tooltip('annais:Q', title='Année', format='d'),
         alt.Tooltip('sexe:N', title='Sexe'),
-        alt.Tooltip('preusuel:N', title='Prénom au rang N'),
-        alt.Tooltip('duree_rang:Q', title='Durée au rang (ans)', format='d'),
+        alt.Tooltip('valeur_abs:Q', title='Durée du règne (ans)', format='d'),
+        alt.Tooltip('prenom_top1:N', title='N°1 de l\'année')
     ]
-).transform_filter(
-    'datum.rang === toNumber(rang_n)'
 ).properties(
     width=280, height=300,
-    title='Durée consécutive au rang N'
+    title='Durée du règne du prénom n°1'
 )
 
-# Graph 3 : Indice de régionalité du prénom de rang N
-graph_regio = alt.Chart(rang_annuel).mark_area(opacity=0.85).encode(
+graph_regio = alt.Chart(df_regio_layer).mark_area(opacity=0.85).encode(
     x=alt.X('annais:Q', title='Année', axis=alt.Axis(format='d')),
-    y=alt.Y('regio_miroir:Q', title='Hommes (+) / Femmes (−)'),
+    y=alt.Y('valeur:Q', title='Hommes (+) / Femmes (−)'),
     color=alt.Color('sexe:N',
                     scale=alt.Scale(domain=['Homme', 'Femme'], range=[COULEUR_HOMME, COULEUR_FEMME]),
                     legend=None),
     tooltip=[
         alt.Tooltip('annais:Q', title='Année', format='d'),
         alt.Tooltip('sexe:N', title='Sexe'),
-        alt.Tooltip('preusuel:N', title='Prénom'),
-        alt.Tooltip('indice_regio:Q', title='Indice de régionalité', format='.4f')
+        alt.Tooltip('valeur_abs:Q', title='Indice de régionalité', format='.4f')
     ]
-).transform_filter(
-    'datum.rang === toNumber(rang_n)'
 ).properties(
     width=280, height=300,
-    title='Régionalité du prénom de rang N'
+    title='Régionalité des prénoms'
 )
 
 # ── LIGNE 2 : assemblage ─────────────────────────────────────────────────────
-partie2 = alt.vconcat(
-    titre_rang_dynamique,
-    alt.hconcat(
-        graph_rang_part,
-        graph_rang_duree,
-        graph_regio,
-        spacing=30, center=False
-    ),
-    spacing=8
+partie2 = alt.hconcat(
+    graph_top1, graph_duree, graph_regio, spacing=30, center=False
 ).properties(
     title=alt.TitleParams(
         'II - Différences des tendances au cours du temps pour les autres prénoms',
