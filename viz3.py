@@ -4,40 +4,72 @@ import altair as alt
 import os
 import webbrowser
 
-alt.data_transformers.disable_max_rows()
+# enable('json') réinstalle le transformer, donc on désactive la limite APRÈS.
 alt.data_transformers.enable('json')
+alt.data_transformers.disable_max_rows()
 
 # ── PARAMÈTRES DE COULEUR ────────────────────────────────────────────────────
-COULEUR_HOMME = '#89c4e1'  # bleu pastel
-COULEUR_FEMME = '#ffb3d1'  # rose pastel
+COULEUR_HOMME = "#1e90c9"  # bleu pastel
+COULEUR_FEMME = "#ff6ba6"  # rose pastel
 
-data = pd.read_csv('data/dpt2020.csv',sep=";")
 
+# ── HELPERS GRAPHIQUES PARTAGÉS ──────────────────────────────────────────────
+# Tous les graphes utilisent la même échelle de couleur, le même axe des années
+# et le même axe vertical en miroir H/F. On les fabrique ici une seule fois.
+
+def echelle_sexe():
+    return alt.Scale(domain=['Homme', 'Femme'], range=[COULEUR_HOMME, COULEUR_FEMME])
+
+def couleur_sexe():
+    return alt.Color('sexe:N', scale=echelle_sexe(), legend=None)
+
+def axe_annee(titre='Année'):
+    return alt.X('annais:Q', title=titre, axis=alt.Axis(format='d'))
+
+def axe_miroir():
+    return alt.Y('valeur:Q', title='Hommes (+) / Femmes (−)')
+
+
+# ── PRÉPARATION D'UNE COUCHE EN MIROIR ───────────────────────────────────────
+# Toutes les couches du tableau de bord suivent le même patron :
+#   sexe numérique -> 'Homme'/'Femme', puis valeur signée (H vers le haut,
+#   F vers le bas) et sa valeur absolue pour les tooltips.
+def prepare_couche(df, col_metrique):
+    df = df.copy()
+    df['sexe'] = df['sexe'].astype(str).replace({'1': 'Homme', '2': 'Femme'})
+    df['valeur'] = np.where(df['sexe'] == 'Homme', df[col_metrique], -df[col_metrique])
+    df['valeur_abs'] = df['valeur'].abs()
+    return df
+
+
+# ── CHARGEMENT & NETTOYAGE ───────────────────────────────────────────────────
+data = pd.read_csv('data/dpt2020.csv', sep=";")
 df = data[(data["annais"] != "XXXX") & (data["dpt"] != "XX")]
+
+# Vrais prénoms uniquement (hors agrégats INSEE commençant par '_').
+df_vrais = df[~df['preusuel'].str.startswith('_')]
 
 # TOTAUX ANNUELS NATIONAUX PAR SEXE (le dénominateur)
 # -------------------------
 # Calculé sur TOUT le dataset (tous prénoms), sinon le dénominateur serait faux.
 # Donne, pour chaque (année, sexe), le nombre total de naissances en France.
-totaux_annuels = df.groupby(['annais', 'sexe'])['nombre'].sum().reset_index()
-totaux_annuels = totaux_annuels.rename(columns={'nombre': 'total_naissances_sexe'})
+totaux_annuels = (
+    df.groupby(['annais', 'sexe'])['nombre'].sum()
+    .reset_index()
+    .rename(columns={'nombre': 'total_naissances_sexe'})
+)
 
 # ============================================================
 # MÉTRIQUE GLOBALE 1 : PART DU TOP 1 (par année et par sexe)
 # Pour chaque (année, sexe), quel % des naissances représente
 # le prénom le plus donné cette année-là.
-# Calculé sur TOUS les vrais prénoms (hors agrégats '_').
 # ============================================================
-df_vrais = df[~df['preusuel'].str.startswith('_')]
-# total par (prénom, année, sexe)
 totaux_prenom_an = df_vrais.groupby(['annais', 'sexe', 'preusuel'])['nombre'].sum().reset_index()
-# pour chaque (année, sexe), on garde la ligne du prénom max
+# Pour chaque (année, sexe), on garde la ligne du prénom max.
 idx_max = totaux_prenom_an.groupby(['annais', 'sexe'])['nombre'].idxmax()
-top1 = totaux_prenom_an.loc[idx_max].copy()
-top1 = top1.merge(totaux_annuels, on=['annais', 'sexe'], how='left')
+top1 = totaux_prenom_an.loc[idx_max].merge(totaux_annuels, on=['annais', 'sexe'], how='left')
 top1['part_top1'] = top1['nombre'] / top1['total_naissances_sexe']
 top1 = top1.rename(columns={'preusuel': 'prenom_top1'})
-# table finale : annais, sexe, part_top1, prenom_top1
 top1_metrique = top1[['annais', 'sexe', 'part_top1', 'prenom_top1']]
 
 # ============================================================
@@ -49,9 +81,9 @@ top1_metrique = top1[['annais', 'sexe', 'part_top1', 'prenom_top1']]
 resultats_duree = []
 for sexe_val in [1, 2]:
     g = top1_metrique[top1_metrique['sexe'] == sexe_val].sort_values('annais').copy()
-    # un nouveau "bloc" commence à chaque changement de prénom n°1
+    # Un nouveau "bloc" commence à chaque changement de prénom n°1.
     bloc = (g['prenom_top1'] != g['prenom_top1'].shift()).cumsum()
-    # durée du règne = taille du bloc
+    # Durée du règne = taille du bloc.
     g['duree_top1'] = g.groupby(bloc)['prenom_top1'].transform('size')
     resultats_duree.append(g[['annais', 'sexe', 'duree_top1', 'prenom_top1']])
 duree_metrique = pd.concat(resultats_duree)
@@ -91,31 +123,31 @@ def _indice_regionalite(sub):
     part = part.div(total_region, axis=1)
     return part.std(axis=1).mean()
 
-lignes_regio = []
-for (annee, sexe_val), sub in df_regio.groupby(['annais', 'sexe']):
-    lignes_regio.append({'annais': annee, 'sexe': sexe_val,
-                         'indice_regio': _indice_regionalite(sub)})
+lignes_regio = [
+    {'annais': annee, 'sexe': sexe_val, 'indice_regio': _indice_regionalite(sub)}
+    for (annee, sexe_val), sub in df_regio.groupby(['annais', 'sexe'])
+]
 regio_metrique = pd.DataFrame(lignes_regio)
 
-# PRÉPARATION DES DONNÉES
-# -------------------------
 
+# ── ANALYSE DES PRÉNOMS ÉPICÈNES ─────────────────────────────────────────────
+
+# Répartition H/F cumulée par prénom (colonnes 1 = masculin, 2 = féminin).
 repartition_sexe = df.groupby(['preusuel', 'sexe'])['nombre'].sum().unstack(fill_value=0)
-
 repartition_sexe['total'] = repartition_sexe.sum(axis=1)
-repartition_sexe['part_minoritaire'] = repartition_sexe.drop(columns=['total']).min(axis=1) / repartition_sexe['total']
-
-# Part masculine globale du prénom : 0 = entièrement féminin, 1 = entièrement masculin.
-# Colonne 1 = sexe masculin dans le dataset INSEE.
+repartition_sexe['part_minoritaire'] = repartition_sexe[[1, 2]].min(axis=1) / repartition_sexe['total']
+# Part masculine globale : 0 = entièrement féminin, 1 = entièrement masculin.
 repartition_sexe['part_masculine'] = repartition_sexe[1] / repartition_sexe['total']
 
-# Règle des 10%, pour filtrer le bruit et les erreurs d'annotation (Marie en H par exemple)
-vrais_epicenes = repartition_sexe[(repartition_sexe['part_minoritaire'] >= 0.10) & (repartition_sexe['total'] >= 500)].index
-# Exclusion de la catégorie fourre-tout "_PRENOMS_RARES" (et tout préfixe '_'),
-# qui n'est pas un vrai prénom mais un agrégat INSEE des prénoms rares.
-# Elle reste comptée dans totaux_annuels (le dénominateur), mais ne doit pas
-# apparaître comme un "prénom" dans l'analyse.
+# Règle des 10%, pour filtrer le bruit et les erreurs d'annotation (Marie en H).
+vrais_epicenes = repartition_sexe[
+    (repartition_sexe['part_minoritaire'] >= 0.10) & (repartition_sexe['total'] >= 500)
+].index
+
+# On exclut aussi tout préfixe '_' (agrégats INSEE des prénoms rares) : ils restent
+# comptés dans totaux_annuels (le dénominateur) mais ne sont pas de vrais prénoms.
 df_filtre = df[df['preusuel'].isin(vrais_epicenes) & (~df['preusuel'].str.startswith('_'))]
+
 evolution_annuelle = df_filtre.groupby(['preusuel', 'sexe', 'annais'])['nombre'].sum().reset_index()
 
 # Passage en PARTS : on divise par le total national du sexe pour cette année.
@@ -124,13 +156,10 @@ evolution_annuelle = evolution_annuelle.merge(totaux_annuels, on=['annais', 'sex
 evolution_annuelle['part'] = evolution_annuelle['nombre'] / evolution_annuelle['total_naissances_sexe']
 
 evolution_pivot = evolution_annuelle.pivot_table(
-    index=['preusuel', 'annais'], 
-    columns='sexe', 
-    values='part', 
-    fill_value=0
+    index=['preusuel', 'annais'], columns='sexe', values='part', fill_value=0
 )
 
-# Filtre de robustesse sur le nombre d'années que le prenom a été donné (si trop faible, la corrélation ne porte pas de sens)
+# Filtre de robustesse : sous 10 années de données, la corrélation n'a pas de sens.
 comptage_annees = evolution_annuelle.groupby('preusuel')['annais'].nunique()
 prenoms_solides = comptage_annees[comptage_annees >= 10].index
 evolution_pivot_filtre = evolution_pivot.loc[prenoms_solides]
@@ -139,75 +168,28 @@ correlations = evolution_pivot_filtre.groupby('preusuel').apply(
     lambda x: x.iloc[:, 0].corr(x.iloc[:, 1], min_periods=5)
 ).reset_index(name='correlation_H_F')
 
-prenoms_epicenes = df_filtre.groupby(['preusuel', 'sexe'])['nombre'].sum().reset_index()
-prenoms_epicenes_pop = prenoms_epicenes.groupby(['preusuel'])['nombre'].sum().reset_index()
-prenoms_epicenes_pop = prenoms_epicenes_pop.merge(correlations, on='preusuel', how='left')
-prenoms_epicenes_pop = prenoms_epicenes_pop.merge(
-    repartition_sexe[['part_masculine']], on='preusuel', how='left'
-)
-prenoms_epicenes_pop = prenoms_epicenes_pop.sort_values(by='correlation_H_F', ascending=True)
-
-# PREPA VISU
-# ----
-evolution_annuelle['part_miroir'] = np.where(
-    evolution_annuelle['sexe'].isin([1]), 
-    evolution_annuelle['part'], 
-    -evolution_annuelle['part']
+# Table de synthèse par prénom : popularité, corrélation H/F, part masculine.
+prenoms_epicenes_pop = (
+    df_filtre.groupby('preusuel')['nombre'].sum().reset_index()
+    .merge(correlations, on='preusuel', how='left')
+    .merge(repartition_sexe[['part_masculine']], on='preusuel', how='left')
+    .rename(columns={'nombre': 'nombre_total'})
+    .sort_values(by='correlation_H_F', ascending=True)
 )
 
-evolution_annuelle['sexe'] = evolution_annuelle['sexe'].astype(str).replace({'1': 'Homme', '2': 'Femme'})
-prenoms_epicenes_pop = prenoms_epicenes_pop.rename(columns={'nombre': 'nombre_total'})
 
-# ====== COUCHE 1 : données PAR PRÉNOM (filtrées par le clic) ======
-df_prenom = evolution_annuelle.merge(
-    prenoms_epicenes_pop[['preusuel', 'nombre_total', 'correlation_H_F']], 
-    on='preusuel', 
-    how='inner'
-)
-df_prenom['metrique'] = 'Part H/F du prénom'
-df_prenom['valeur'] = df_prenom['part_miroir']
-df_prenom['valeur_abs'] = df_prenom['valeur'].abs()
-df_prenom['titre_affiche'] = df_prenom['preusuel']
+# ── PRÉPARATION DES COUCHES DE LA VISU ───────────────────────────────────────
+# Couche 1 : par prénom (filtrée par le clic). Les colonnes nombre_total /
+# correlation_H_F ne sont pas affichées dans ce graphe, donc inutile de les joindre.
+df_prenom = prepare_couche(evolution_annuelle, 'part')
 
-# ====== COUCHE 2 : données GLOBALES top 1 (indépendantes du prénom) ======
-# Une ligne par (année, sexe). PAS de colonne prénom -> le clic ne peut pas la filtrer.
-df_top1 = top1_metrique.copy()
-df_top1['sexe'] = df_top1['sexe'].astype(str).replace({'1': 'Homme', '2': 'Femme'})
-df_top1['top1_miroir'] = np.where(
-    df_top1['sexe'] == 'Homme', df_top1['part_top1'], -df_top1['part_top1']
-)
-df_top1['metrique'] = 'Part du top 1 (global)'
-df_top1['valeur'] = df_top1['top1_miroir']
-df_top1['valeur_abs'] = df_top1['valeur'].abs()
-df_top1['titre_affiche'] = 'Poids du prénom n°1 (par année)'
-
-# ====== COUCHE 3 : durée du règne du top 1 (globale, indépendante du prénom) ======
-# Même modèle : une ligne par (année, sexe), pas de colonne prénom filtrable.
-df_duree = duree_metrique.copy()
-df_duree['sexe'] = df_duree['sexe'].astype(str).replace({'1': 'Homme', '2': 'Femme'})
-# en miroir : H vers le haut, F vers le bas (en nombre d'années)
-df_duree['duree_miroir'] = np.where(
-    df_duree['sexe'] == 'Homme', df_duree['duree_top1'], -df_duree['duree_top1']
-)
-df_duree['metrique'] = 'Durée du règne du top 1 (global)'
-df_duree['valeur'] = df_duree['duree_miroir']
-df_duree['valeur_abs'] = df_duree['valeur'].abs()
-df_duree['titre_affiche'] = 'Durée du règne du prénom n°1'
-
-# ====== COUCHE 4 : indice de régionalité (global, indépendant du prénom) ======
-df_regio_layer = regio_metrique.copy()
-df_regio_layer['sexe'] = df_regio_layer['sexe'].astype(str).replace({'1': 'Homme', '2': 'Femme'})
-df_regio_layer['regio_miroir'] = np.where(
-    df_regio_layer['sexe'] == 'Homme', df_regio_layer['indice_regio'], -df_regio_layer['indice_regio']
-)
-df_regio_layer['metrique'] = 'Indice de régionalité (global)'
-df_regio_layer['valeur'] = df_regio_layer['regio_miroir']
-df_regio_layer['valeur_abs'] = df_regio_layer['valeur'].abs()
-df_regio_layer['titre_affiche'] = 'Régionalité des prénoms (écart-type entre régions)'
+# Couches 2 à 4 : métriques globales (une ligne par année/sexe, pas de prénom filtrable).
+df_top1 = prepare_couche(top1_metrique, 'part_top1')
+df_duree = prepare_couche(duree_metrique, 'duree_top1')
+df_regio_layer = prepare_couche(regio_metrique, 'indice_regio')
 
 
-# CONSTRUCTION DE LA VISU
-# -----------------------
+# ── CONSTRUCTION DE LA VISU ───────────────────────────────────────────────────
 
 prenom_top = prenoms_epicenes_pop.sort_values(by='nombre_total', ascending=False).iloc[0]['preusuel']
 
@@ -217,13 +199,13 @@ selection = alt.selection_point(
     value=[{'preusuel': prenom_top}]
 )
 
-# ── LIGNE 1, GAUCHE : Scatter plot interactif des prénoms épicènes ──────────
+# ── LIGNE 1, GAUCHE : Scatter plot interactif des prénoms épicènes ───────────
 scatter_plot = alt.Chart(prenoms_epicenes_pop).mark_circle(size=80).encode(
     x=alt.X('nombre_total:Q',
             scale=alt.Scale(type='log'),
             title='Popularité totale (cumul H+F) — Échelle log'),
     y=alt.Y('correlation_H_F:Q',
-            title='Corrélation Homme / Femme (−1 à 1)'),
+            title='Corrélation H/F (−1 = "vases communicants" ; 1 = "tendances similaires")'),
     tooltip=[
         alt.Tooltip('preusuel:N', title='Prénom'),
         alt.Tooltip('nombre_total:Q', title='Popularité totale'),
@@ -249,13 +231,11 @@ ligne_zero = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(
 
 scatter_plot = ligne_zero + scatter_plot
 
-# ── LIGNE 1, DROITE : Évolution temporelle (fixe, liée à la sélection) ──────
+# ── LIGNE 1, DROITE : Évolution temporelle (fixe, liée à la sélection) ───────
 evolution_fixe = alt.Chart(df_prenom).mark_area(opacity=0.85).encode(
-    x=alt.X('annais:Q', title='Année de naissance', axis=alt.Axis(format='d')),
-    y=alt.Y('valeur:Q', title='Hommes (+) / Femmes (−)'),
-    color=alt.Color('sexe:N', title='Sexe',
-                    scale=alt.Scale(domain=['Homme', 'Femme'], range=[COULEUR_HOMME, COULEUR_FEMME]),
-                    legend=None),
+    x=axe_annee('Année de naissance'),
+    y=axe_miroir(),
+    color=couleur_sexe(),
     detail='preusuel:N',
     tooltip=[
         alt.Tooltip('preusuel:N', title='Prénom'),
@@ -270,14 +250,12 @@ evolution_fixe = alt.Chart(df_prenom).mark_area(opacity=0.85).encode(
     title=alt.TitleParams('Évolution temporelle', fontSize=14, color='#777', anchor='start')
 )
 
-# Légende Homme/Femme partagée pour la ligne 1 (placée sous le scatter)
+# Légende Homme/Femme partagée pour la ligne 1 (placée sous le scatter).
 _df_leg = pd.DataFrame({'Sexe': ['Homme', 'Femme'], 'x': [0.25, 0.75]})
 _c1 = alt.Chart(_df_leg).mark_circle(size=160).encode(
     x=alt.X('x:Q', scale=alt.Scale(domain=[0, 1]), axis=None, title=None),
     y=alt.value(20),
-    color=alt.Color('Sexe:N',
-                    scale=alt.Scale(domain=['Homme', 'Femme'], range=[COULEUR_HOMME, COULEUR_FEMME]),
-                    legend=None)
+    color=alt.Color('Sexe:N', scale=echelle_sexe(), legend=None)
 )
 _t1 = alt.Chart(_df_leg).mark_text(align='left', baseline='middle', fontSize=13, dx=12).encode(
     x=alt.X('x:Q', scale=alt.Scale(domain=[0, 1]), axis=None, title=None),
@@ -293,60 +271,37 @@ partie1 = alt.hconcat(
     spacing=40, center=False
 ).properties(
     title=alt.TitleParams(
-        'I - Cas particulier des prénoms épicènes',
+        'Cas des prénoms épicènes',
         fontSize=20, fontWeight='bold', anchor='start', color='#222'
     )
 )
 
 # ── LIGNE 2 : trois graphes globaux statiques ────────────────────────────────
-graph_top1 = alt.Chart(df_top1).mark_area(opacity=0.85).encode(
-    x=alt.X('annais:Q', title='Année', axis=alt.Axis(format='d')),
-    y=alt.Y('valeur:Q', title='Hommes (+) / Femmes (−)'),
-    color=alt.Color('sexe:N',
-                    scale=alt.Scale(domain=['Homme', 'Femme'], range=[COULEUR_HOMME, COULEUR_FEMME]),
-                    legend=None),
-    tooltip=[
+# Même structure pour les trois : aire en miroir H/F, seuls le titre et le
+# tooltip de la valeur changent (et l'affichage ou non du prénom n°1).
+def graphe_global(data, titre, abs_titre, abs_format, avec_prenom=False):
+    tooltip = [
         alt.Tooltip('annais:Q', title='Année', format='d'),
         alt.Tooltip('sexe:N', title='Sexe'),
-        alt.Tooltip('valeur_abs:Q', title='Part du top 1', format='.2%'),
-        alt.Tooltip('prenom_top1:N', title='N°1 de l\'année')
+        alt.Tooltip('valeur_abs:Q', title=abs_titre, format=abs_format),
     ]
-).properties(
-    width=280, height=300,
-    title='Poids du prénom n°1'
-)
+    if avec_prenom:
+        tooltip.append(alt.Tooltip('prenom_top1:N', title="N°1 de l'année"))
+    return alt.Chart(data).mark_area(opacity=0.85).encode(
+        x=axe_annee('Année'),
+        y=axe_miroir(),
+        color=couleur_sexe(),
+        tooltip=tooltip
+    ).properties(width=280, height=300, title=titre)
 
-graph_duree = alt.Chart(df_duree).mark_area(opacity=0.85).encode(
-    x=alt.X('annais:Q', title='Année', axis=alt.Axis(format='d')),
-    y=alt.Y('valeur:Q', title='Hommes (+) / Femmes (−)'),
-    color=alt.Color('sexe:N',
-                    scale=alt.Scale(domain=['Homme', 'Femme'], range=[COULEUR_HOMME, COULEUR_FEMME]),
-                    legend=None),
-    tooltip=[
-        alt.Tooltip('annais:Q', title='Année', format='d'),
-        alt.Tooltip('sexe:N', title='Sexe'),
-        alt.Tooltip('valeur_abs:Q', title='Durée du règne (ans)', format='d'),
-        alt.Tooltip('prenom_top1:N', title='N°1 de l\'année')
-    ]
-).properties(
-    width=280, height=300,
-    title='Durée du règne du prénom n°1'
+graph_top1 = graphe_global(
+    df_top1, 'Poids du prénom n°1', 'Part du top 1', '.2%', avec_prenom=True
 )
-
-graph_regio = alt.Chart(df_regio_layer).mark_area(opacity=0.85).encode(
-    x=alt.X('annais:Q', title='Année', axis=alt.Axis(format='d')),
-    y=alt.Y('valeur:Q', title='Hommes (+) / Femmes (−)'),
-    color=alt.Color('sexe:N',
-                    scale=alt.Scale(domain=['Homme', 'Femme'], range=[COULEUR_HOMME, COULEUR_FEMME]),
-                    legend=None),
-    tooltip=[
-        alt.Tooltip('annais:Q', title='Année', format='d'),
-        alt.Tooltip('sexe:N', title='Sexe'),
-        alt.Tooltip('valeur_abs:Q', title='Indice de régionalité', format='.4f')
-    ]
-).properties(
-    width=280, height=300,
-    title='Régionalité des prénoms'
+graph_duree = graphe_global(
+    df_duree, 'Durée du règne du prénom n°1', 'Durée du règne (ans)', 'd', avec_prenom=True
+)
+graph_regio = graphe_global(
+    df_regio_layer, 'Régionalité des prénoms', 'Indice de régionalité', '.4f'
 )
 
 # ── LIGNE 2 : assemblage ─────────────────────────────────────────────────────
@@ -354,7 +309,7 @@ partie2 = alt.hconcat(
     graph_top1, graph_duree, graph_regio, spacing=30, center=False
 ).properties(
     title=alt.TitleParams(
-        'II - Différences des tendances au cours du temps pour les autres prénoms',
+        "Différences des tendances au cours du temps pour l'ensemble des prénoms",
         fontSize=20, fontWeight='bold', anchor='start', color='#222'
     )
 )
@@ -367,7 +322,7 @@ tableau_de_bord = alt.vconcat(
 ).properties(
     title=alt.TitleParams(
         'Prénoms en France (1900–2020)',
-        subtitle='Exploration de l\'impact du sexe dans les différences de tendances',
+        subtitle="Exploration de l'impact du sexe dans les différences de tendances",
         fontSize=28, fontWeight='bold', anchor='middle', color='#111',
         subtitleFontSize=14, subtitleColor='#555'
     )
